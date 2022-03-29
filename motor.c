@@ -2,9 +2,10 @@
 #include "RTE_Components.h"             // Component selection
 #include "system_MKL25Z4.h"             // Keil::Device:Startup
 #include "math.h"
-
+#define LEDHeater (1)			//Simulating Heater as LED on D PIN 0, This requires TPM0 and Channel 0 "Pavan"
+#define PWM_PERIOD (48000)
 // PORT C Define
-#define SERVO_SHIFT (0) // PORTC relay connected to Servo.
+#define SERVO_SHIFT (9) // PORTC relay connected to Servo. // set for PWM
 #define LED_MED (3) // PORTC LED is meditation is still active
 #define LED_SERVO (7) // PORTC led if inhaling/exhaling
 
@@ -30,21 +31,21 @@
 #define exhaleMask (0x000F) // grab exhale time
 
 // Misc timers
-#define MED_TIME_DEFAULT (60) // default number of seconds
-
+#define MED_TIME_DEFAULT (12000) // default number of milliseconds
+#define PERIOD (3750)
 #define MASK(x) (1ul << x)
 
 // Prototypes
 void initPins(void);
-void initSysTick(void);
+void initTPM0(void);
 void breathStateMachine(void);
 void handleLedTimes(short); // timer, forced plus? forced minus?
-void handleHeatPWM(void);
 void handleMeditationStatus(void);
 void setMedOnOffSettings(short);
 void setLedMask(short);
 void handleSwitches(void);
-
+void initHeater (uint16_t);	//"Pavan"
+void setHeaterPWMDutyCycle();	//"Pavan"
 // Arrays for init
 static short portCGpio[2] = {SERVO_SHIFT, LED_MED};
 static short portAGpio[4] = {LED1, LED2, LED3, LED4}; // LED1 indicates lowest time remaining
@@ -57,7 +58,8 @@ static short inMeditation = 0;
 static short inhaleExhaleSettings[3] = {0x22, 0x32, 0x43}; // Inhale/Exhale timer
 static short breathingSetting = 0; // default
 static short prev_medState = 0; // Have we transistioned states?
-
+static short InhaleExhaleSetting = 0;	// setting for inhale/exhale  "Pavan"
+static short prev_heaterSetting = 5; // a value that is impossible to set later
 // Globals for Meditation Time LEDS.
 static uint16_t medTimeCurrent = MED_TIME_DEFAULT; // 20 minute default
 static uint16_t medTimeMax = MED_TIME_DEFAULT; // max time 
@@ -102,11 +104,13 @@ static short medLedMask = 0; // contains 4 bits that will determine the LEDs sta
 int main()
 {
 	initPins(); // init speaker port
-	initSysTick(); // init pit timer
+	initTPM0(); // init pit timer
+	initHeater (PWM_PERIOD);	//Initliaze the heater "Pavan"
 	while(1)
 	{
 		handleSwitches();
 		handleMeditationStatus();
+		setHeaterPWMDutyCycle();	//"Pavan"
 	}
 }
 
@@ -114,7 +118,10 @@ int main()
 void initPins()
 {
 	SIM->SCGC5 |= (SIM_SCGC5_PORTC_MASK | SIM_SCGC5_PORTD_MASK | SIM_SCGC5_PORTA_MASK);
-	
+
+	// PortD pin 3 alt4 is FTM0_CH3
+	PORTC->PCR[LED_MED] &= ~PORT_PCR_MUX_MASK;
+	PORTC->PCR[LED_MED] |= PORT_PCR_MUX(1);
 	// Configuring buttons
 	for(int i = 0; i < sizeof(portDGpio)/(sizeof(short)); i++)
 	{
@@ -122,13 +129,7 @@ void initPins()
 		PORTD->PCR[portDGpio[i]] |= (PORT_PCR_MUX(1) | PORT_PCR_IRQC(10) | PORT_PCR_PE_MASK | PORT_PCR_PS_MASK); // gpio, check falling edge, pullup resistor set
 		PTD->PDDR &= (uint8_t)~MASK(portDGpio[i]); // set pin direction as input
 	}
-	// configuring Servo related GPIOs
-	for(int i = 0; i < sizeof(portCGpio)/(sizeof(short)); i++)
-	{
-		PORTC->PCR[portCGpio[i]] |= PORT_PCR_MUX(1);
-		PTC->PDDR |= MASK(portCGpio[i]);
-		PTC->PCOR |= MASK(portCGpio[i]);
-	}
+
 	// configuring PORT A GPIO LEDS
 	for(int i = 0; i < sizeof(portAGpio)/(sizeof(short)); i++)
 	{
@@ -139,14 +140,16 @@ void initPins()
 }
 
 // Inits the Systick to keep track of internal clock
-void initSysTick()
+void initTPM0()
 {
-	SysTick->LOAD = (48000000L/24); // lower sysclock to 1Mhz to fit in Load
-	NVIC_SetPriority(SysTick_IRQn, 3);
-	NVIC_ClearPendingIRQ(SysTick_IRQn);
-	NVIC_EnableIRQ(SysTick_IRQn);
-	SysTick->VAL = 0;
-	SysTick->CTRL = SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk; // Enable interrupts and timer
+	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
+	SIM->SOPT2 |= (SIM_SOPT2_TPMSRC(1) | SIM_SOPT2_PLLFLLSEL_MASK);	
+	TPM0->MOD = (PERIOD - 1); // 3750, 10 times a second
+	TPM0->SC = TPM_SC_PS(7); // 128 prescalar
+	TPM0->CONTROLS[4].CnSC = TPM_CnSC_MSA_MASK | TPM_CnSC_CHIE_MASK | TPM_CnSC_ELSB_MASK; 
+	TPM0->CONTROLS[4].CnV = 0; // full duty cycle
+	TPM0->SC |= TPM_SC_CMOD(1); // Start with counter disabled
+
 }
 
 // Handles meditation state
@@ -396,3 +399,94 @@ void SysTick_Handler()
 		handleLedTimes(_timer);
 	}
 }
+
+//Function is added by Pavan
+void initHeater  (uint16_t period)
+{
+	// enable the clock for PORTD
+	SIM->SCGC5 |= SIM_SCGC5_PORTD_MASK;  									
+	
+	// Init the Heater PWM (Here LED is simulated as Heater)
+	PORTD->PCR[LEDHeater] &= ~PORT_PCR_MUX_MASK;
+	// Select the PIN for ALT4/TPM functionality
+	PORTD->PCR[LEDHeater] |= PORT_PCR_MUX(4);
+	// Selecting the LED pins data direction registers is not advised here. 
+	// The PWM functionality does not run in thst case
+	
+	//enable the clock for TPM
+	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
+	//Configure TPM
+	
+	//Set clock source for tpm : 48 MHz
+	SIM	->	SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
+	// Selecting the clock from the board, internal clock is set to use
+	SIM -> 	SOPT2 |= SIM_SOPT2_TPMSRC (1);
+
+	SIM-> SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
+	SIM->	SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
+	
+	//Load the counter and MOD, this is active low PWM signal
+	TPM0-> MOD = period-1;
+	
+	//Set TPM count direction to up with a divide by 2 prescaler
+
+	TPM0->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
+	TPM0->SC  = TPM_SC_CMOD(1) | TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
+	
+	//Continue operation in debug mode
+	TPM0->CONF  |= TPM_CONF_DBGMODE(3);
+	
+	// Configured as Edge Aligned PWM, 	
+	//Set channel TPM0 Channel 0 to edge-aligned low true PWM
+	TPM0_C1SC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
+	TPM0_C1SC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
+	
+}	// End of Init Heater function
+
+//Function is added by Pavan
+void setHeaterPWMDutyCycle (void) 
+{
+
+//detrmine the inhale exhale setting
+//Inhale timinmg could independently determine the setting uniquely 
+//static short inhaleExhaleSettings[3] = {0x22, 0x32, 0x43}; 									// Inhale/Exhale timer
+
+InhaleExhaleSetting = ((inhaleMask & inhaleExhaleSettings[breathingSetting]) >> 4UL);
+
+short intMinHeatingLevel = 0;
+short intMaxHeatingLevel = 5;
+uint32_t HeaterPWM = PWM_PERIOD;
+if(InhaleExhaleSetting != prev_heaterSetting)
+{
+	switch(InhaleExhaleSetting)
+    {   
+		case 0: 	//No heating requested
+			HeaterPWM = PWM_PERIOD;
+		break;
+		case 1: 		//20% PWM
+			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
+		break;
+		case 2: 		//40% PWM
+  		HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
+    break;
+		case 3: 		//60% PWM
+			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
+    break;
+		case 4: 		//80% PWM
+			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
+    break;
+		case 5: 		//Maximum hearting with 100% PWM, unused in this program
+			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
+    break;
+		default: 	//Indetermined state, Unknown state, hold the last value
+			HeaterPWM = PWM_PERIOD;
+ 		break;
+    } //End of the switch case
+		TPM0->CONTROLS[1].CnV=HeaterPWM;
+}
+else
+{
+	// warnings. 
+}
+	prev_heaterSetting = InhaleExhaleSetting;
+} // End of setHeaterPWMDutyCycle function
