@@ -6,4 +6,5 @@
   C:\Users\Michael\AppData\Local\Arm\Packs\ARM\CMSIS\5.8.0\CMSIS\Core\Include\cmsis_compiler.h \
   C:\Users\Michael\AppData\Local\Arm\Packs\ARM\CMSIS\5.8.0\CMSIS\Core\Include\cmsis_armclang.h \
   RTE\Device\MKL25Z128xxx4\system_MKL25Z4.h \
-  RTE\_CMSIS-DAP\RTE_Components.h
+  RTE\_CMSIS-DAP\RTE_Components.h \
+  C:\Keil_v5\ARM\ARMCLANG\Bin\..\include\math.h

@@ -142,13 +142,10 @@ void initTPM0()
 	SIM->SOPT2 |= (SIM_SOPT2_TPMSRC(1) | SIM_SOPT2_PLLFLLSEL_MASK);	
 	TPM0->MOD = (PERIOD - 1); // 3750, 10 times a second
 	TPM0->SC = TPM_SC_PS(7); // 128 prescalar
-	TPM0->CONTROLS[4].CnSC = TPM_CnSC_MSA_MASK; 
+	TPM0->CONTROLS[4].CnSC = TPM_CnSC_MSA_MASK | TPM_CnSC_CHIE_MASK | TPM_CnSC_ELSB_MASK; 
 	TPM0->CONTROLS[4].CnV = 0; // full duty cycle
-	TPM0->SC |= TPM_SC_CMOD(0); // Start with counter disabled
+	TPM0->SC |= TPM_SC_CMOD(1); // Start with counter disabled
 
-	// PORTC configured for output
-	PORTC->PCR[SERVO_SHIFT] &= ~PORT_PCR_MUX_MASK;
-	PORTC->PCR[SERVO_SHIFT] |= PORT_PCR_MUX(4);
 }
 
 // Handles meditation state
