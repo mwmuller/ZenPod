@@ -37,7 +37,7 @@
 
 // Prototypes
 void initPins(void);
-void initTPM0(void);
+void initSysTick(void);
 void breathStateMachine(void);
 void handleLedTimes(short); // timer, forced plus? forced minus?
 void handleMeditationStatus(void);
@@ -104,7 +104,7 @@ static short medLedMask = 0; // contains 4 bits that will determine the LEDs sta
 int main()
 {
 	initPins(); // init speaker port
-	initTPM0(); // init pit timer
+	initSysTick(); // init pit timer
 	initHeater (PWM_PERIOD);	//Initliaze the heater "Pavan"
 	while(1)
 	{
@@ -140,16 +140,14 @@ void initPins()
 }
 
 // Inits the Systick to keep track of internal clock
-void initTPM0()
+void initSysTick()
 {
-	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
-	SIM->SOPT2 |= (SIM_SOPT2_TPMSRC(1) | SIM_SOPT2_PLLFLLSEL_MASK);	
-	TPM0->MOD = (PERIOD - 1); // 3750, 10 times a second
-	TPM0->SC = TPM_SC_PS(7); // 128 prescalar
-	TPM0->CONTROLS[4].CnSC = TPM_CnSC_MSA_MASK | TPM_CnSC_CHIE_MASK | TPM_CnSC_ELSB_MASK; 
-	TPM0->CONTROLS[4].CnV = 0; // full duty cycle
-	TPM0->SC |= TPM_SC_CMOD(1); // Start with counter disabled
-
+	SysTick->LOAD = (48000000L/24); // lower sysclock to 1Mhz to fit in Load
+	NVIC_SetPriority(SysTick_IRQn, 3);
+	NVIC_ClearPendingIRQ(SysTick_IRQn);
+	NVIC_EnableIRQ(SysTick_IRQn);
+	SysTick->VAL = 0;
+	SysTick->CTRL = SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk; // Enable interrupts and timer
 }
 
 // Handles meditation state
