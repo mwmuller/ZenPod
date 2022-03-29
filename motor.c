@@ -4,7 +4,7 @@
 #include "math.h"
 
 // PORT C Define
-#define SERVO_SHIFT (0) // PORTC relay connected to Servo.
+#define SERVO_SHIFT (9) // PORTC relay connected to Servo. // set for PWM
 #define LED_MED (3) // PORTC LED is meditation is still active
 #define LED_SERVO (7) // PORTC led if inhaling/exhaling
 
@@ -30,13 +30,13 @@
 #define exhaleMask (0x000F) // grab exhale time
 
 // Misc timers
-#define MED_TIME_DEFAULT (60) // default number of seconds
-
+#define MED_TIME_DEFAULT (12000) // default number of milliseconds
+#define PERIOD (3750)
 #define MASK(x) (1ul << x)
 
 // Prototypes
 void initPins(void);
-void initSysTick(void);
+void initTPM0(void);
 void breathStateMachine(void);
 void handleLedTimes(short); // timer, forced plus? forced minus?
 void handleHeatPWM(void);
@@ -102,7 +102,7 @@ static short medLedMask = 0; // contains 4 bits that will determine the LEDs sta
 int main()
 {
 	initPins(); // init speaker port
-	initSysTick(); // init pit timer
+	initTPM0(); // init pit timer
 	while(1)
 	{
 		handleSwitches();
@@ -114,7 +114,10 @@ int main()
 void initPins()
 {
 	SIM->SCGC5 |= (SIM_SCGC5_PORTC_MASK | SIM_SCGC5_PORTD_MASK | SIM_SCGC5_PORTA_MASK);
-	
+
+	// PortD pin 3 alt4 is FTM0_CH3
+	PORTC->PCR[LED_MED] &= ~PORT_PCR_MUX_MASK;
+	PORTC->PCR[LED_MED] |= PORT_PCR_MUX(1);
 	// Configuring buttons
 	for(int i = 0; i < sizeof(portDGpio)/(sizeof(short)); i++)
 	{
@@ -122,13 +125,7 @@ void initPins()
 		PORTD->PCR[portDGpio[i]] |= (PORT_PCR_MUX(1) | PORT_PCR_IRQC(10) | PORT_PCR_PE_MASK | PORT_PCR_PS_MASK); // gpio, check falling edge, pullup resistor set
 		PTD->PDDR &= (uint8_t)~MASK(portDGpio[i]); // set pin direction as input
 	}
-	// configuring Servo related GPIOs
-	for(int i = 0; i < sizeof(portCGpio)/(sizeof(short)); i++)
-	{
-		PORTC->PCR[portCGpio[i]] |= PORT_PCR_MUX(1);
-		PTC->PDDR |= MASK(portCGpio[i]);
-		PTC->PCOR |= MASK(portCGpio[i]);
-	}
+
 	// configuring PORT A GPIO LEDS
 	for(int i = 0; i < sizeof(portAGpio)/(sizeof(short)); i++)
 	{
@@ -139,14 +136,19 @@ void initPins()
 }
 
 // Inits the Systick to keep track of internal clock
-void initSysTick()
+void initTPM0()
 {
-	SysTick->LOAD = (48000000L/24); // lower sysclock to 1Mhz to fit in Load
-	NVIC_SetPriority(SysTick_IRQn, 3);
-	NVIC_ClearPendingIRQ(SysTick_IRQn);
-	NVIC_EnableIRQ(SysTick_IRQn);
-	SysTick->VAL = 0;
-	SysTick->CTRL = SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk; // Enable interrupts and timer
+	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
+	SIM->SOPT2 |= (SIM_SOPT2_TPMSRC(1) | SIM_SOPT2_PLLFLLSEL_MASK);	
+	TPM0->MOD = (PERIOD - 1); // 3750, 10 times a second
+	TPM0->SC = TPM_SC_PS(7); // 128 prescalar
+	TPM0->CONTROLS[4].CnSC = TPM_CnSC_MSA_MASK; 
+	TPM0->CONTROLS[4].CnV = 0; // full duty cycle
+	TPM0->SC |= TPM_SC_CMOD(0); // Start with counter disabled
+
+	// PORTC configured for output
+	PORTC->PCR[SERVO_SHIFT] &= ~PORT_PCR_MUX_MASK;
+	PORTC->PCR[SERVO_SHIFT] |= PORT_PCR_MUX(4);
 }
 
 // Handles meditation state
