@@ -14,8 +14,8 @@
 #include <WiFiClient.h>
 #include <stdio.h>
 
-const char* ssid = "BeOurGuest";
-const char* password = "idontknowit";
+const char* ssid = "ESP8266-Access-Point";
+const char* password = "123456789";
 
 //Your IP address or domain name with URL path
 const char* serverNameZen = "http://192.168.4.1/ZenPod";

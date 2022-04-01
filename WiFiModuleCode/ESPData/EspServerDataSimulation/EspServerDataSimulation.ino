@@ -12,20 +12,18 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESPAsyncWebServer.h>
-
+#include <Ticker.h>
 AsyncWebServer server(80);
 
+Ticker tick;
 // Set your access point network credentials
-const char* ssid = "ESP8266-Access-Point";
-const char* password = "123456789";
-
+const char* ssid = "BeOurGuest";
+const char* password = "idontknowit";
 const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
 
-String meditationTime;
-String breathSetting;
-String onOff = "0";
+
 // HTML web page to handle 3 input fields (input1, input2, input3)
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
@@ -33,15 +31,30 @@ const char index_html[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   </head><body>
   <form action="/get">
-    input1: <input type="text" name="Meditation Time">
-  </form><br>
-  <form action="/get">
-    input2: <input type="text" name="Breathing Mode">
+    Meditation Time: <input type="text" name="input1">
+    <br> <p> Maximum meditation time is 180 min </p>
+    <br> Breathing Pattern: <input type="text" name="input2">
+    <br> <p> 1 = 2 seconds inhale and exhale </p>
+    <br> <p> 2 = 3 seconds inhale and 2 seconds exhale </p>
+    <br> <p> 3 = 4 seconds inhale and 3 seconds exhale </p>
     <input type="submit" value="Submit">
   </form><br>
-  input3: <input type="text" name="On/Off">
-    <input type="submit" value="Submit">
-  </form><br>
+  <form action="/start">
+    <input type="submit" onclick="myFunction()" value="Meditation Start" name="start">
+    <p id="demo"</p>
+  </form>
+  <form action="/stop">
+    <input type="submit" onclick="myFunction()" value="Meditation Stop" name="stop">
+  </form>
+
+  <script>
+  function medStart() {
+    document.getElementById("demo").innerHTML = "Meditation Started";
+  }
+  function medStop() {
+    document.getElementById("demo").innerHTML = "Meditation Stopped";
+  }
+</script>
 </body></html>)rawliteral";
 
 void notFound(AsyncWebServerRequest *request) {
@@ -67,33 +80,50 @@ void setup() {
 
   // Send a GET request to <ESP_IP>/get?input1=<inputMessage>
   server.on("/get", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    uint8_t dataSend;
-    String inputParam;
+    String inputMessage1 = "0";
+    String inputMessage2 = "0";
+    String inputParam1;
+    String inputParam2;
     // GET input1 value on <ESP_IP>/get?input1=<inputMessage>
     if (request->hasParam(PARAM_INPUT_1)) {
-      meditationTime = request->getParam(PARAM_INPUT_1)->value();
-      breathSetting = request->getParam(PARAM_INPUT_2)->value();
-      inputParam = PARAM_INPUT_1;
+      inputMessage1 = request->getParam(PARAM_INPUT_1)->value();
+      inputParam1 = PARAM_INPUT_1;
     }
     // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
-    else if (request->hasParam(PARAM_INPUT_3)) {
-      onOff = request->getParam(PARAM_INPUT_3)->value();
-      inputParam = PARAM_INPUT_3;
+    if (request->hasParam(PARAM_INPUT_2)) {
+      inputMessage2 = request->getParam(PARAM_INPUT_2)->value();
+      inputParam2 = PARAM_INPUT_2;
     }
     else {
-      meditationTime = "No message sent";
-      inputParam = "none";
+      inputMessage1 = "No message sent";
+      inputMessage2 = "No message sent";
+      inputParam1 = "none";
+      inputParam2 = "none";
     }
-    Serial.println(meditationTime);
-    request->send(200, "text/html", "HTTP GET request sent to your ESP on input field (" 
-                                     + inputParam + ") with the following values:" + 
-                                     "<br> Meditation Time: "+ meditationTime +
-                                     "<br> Breathing Setting: "+ breathSetting +
-                                     "<br> Data to be sent: "+ breathSetting +
-                                     "" + "<br><a href=\"/\">Return to Home Page</a>");
+    Serial.println(inputMessage1);
+    Serial.println(inputMessage2);
+    request->send(200, "text/html", "HTTP GET request sent to your ESP on "
+                                     "input field (" + inputParam1 + ")" +
+                                     "with value: " + inputMessage1 +
+                                     "<br> input field (" + inputParam1 + ") " +
+                                     "with value: " + inputMessage2 +
+                                     "<br><a href=\"/\">Return to Home Page</a>");
+
+     handleIt(); // SEND IT TO UART HERE
   });
+
+  server.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
+  tick.once_ms<AsyncWebServerRequest *>(500, [](AsyncWebServerRequest *req) {
+    req->send(200, "text/plain", "Success");
+  }, request);
+});
   server.onNotFound(notFound);
   server.begin();
+}
+
+void handleIt()
+{
+  Serial.println("You'redumb");
 }
 
 void loop() {
