@@ -6,7 +6,7 @@
 #define PWM_PERIOD (48000)
 
 // PORT C Define breathing
-#define SERVO_SHIFT (9) // PORTC relay connected to Servo. // set for PWM
+#define SERVO_SHIFT (0) // PORTC relay connected to Servo.
 #define LED_MED (3) // PORTC LED is meditation is still active
 
 //define 4 LEDS on PORT A
@@ -22,7 +22,7 @@
 #define PLUS_SWITCH (0)
 #define MINUS_SWITCH (5)
 
-// PORTE pin 0 is Rx for ESP
+// PORTE pin 1 is Rx from ESP
 #define UART1_RX_ESP (1)
 
 // Delays for state machine
@@ -35,7 +35,7 @@
 
 // Misc timers
 #define MED_TIME_DEFAULT (60) // default number of milliseconds
-#define MED_TIME_SCALAR (5) // Used to scale up from 5 bits
+#define MED_TIME_SCALAR (10) // Used to scale up from 5 bits
 #define MASK(x) (1ul << x)
 
 // Prototypes
@@ -130,10 +130,14 @@ int main()
 void initPins()
 {
 	SIM->SCGC5 |= (SIM_SCGC5_PORTC_MASK | SIM_SCGC5_PORTD_MASK | SIM_SCGC5_PORTA_MASK | SIM_SCGC5_PORTE_MASK);
-
-	// PortD pin 3 alt4 is FTM0_CH3
-	PORTC->PCR[LED_MED] &= ~PORT_PCR_MUX_MASK;
-	PORTC->PCR[LED_MED] |= PORT_PCR_MUX(1);
+	
+	// configure MED LED and Servo Motor
+	for(int i = 0; i < sizeof(portCGpio)/(sizeof(uint8_t)); i++)
+	{
+		PORTC->PCR[portCGpio[i]] |= PORT_PCR_MUX(1);
+		PTC->PDDR |= MASK(portCGpio[i]);
+		PTC->PCOR |= MASK(portCGpio[i]);
+	}
 	// Configuring buttons
 	for(int i = 0; i < sizeof(portDGpio)/(sizeof(uint8_t)); i++)
 	{
@@ -156,21 +160,20 @@ void initUart1()
 	// configure UART1 port
 	PORTE->PCR[UART1_RX_ESP] &= ~PORT_PCR_MUX_MASK;
 	PORTE->PCR[UART1_RX_ESP] |= PORT_PCR_MUX(3);
-	
-	SIM->SOPT5 |= SIM_SOPT5_UART1RXSRC(0); // set the UART1 src clock
 	SIM->SCGC4 |= SIM_SCGC4_UART1_MASK; // set clock for scgc4 uart1
+	SIM->SOPT5 |= SIM_SOPT5_UART1RXSRC(0); // Set the src for rx
 	
 	// Init UART settings
 	
 	// Baud rate --> the baud rate equals baud clock / ((OSR+1) × BR).
 	// 9600 = 48Mhz / ((15 + 1) * 9600) => 48,000,000/(16 * 9600) => 0x138
 	UART1->BDL = 0x38;
-	UART1->BDH = 0x1;
-	
+	UART1->BDH = 0x01;
+
 	// Data communication config
 	UART1->C1 = 0x00;
 	UART1->C2 |= (UART_C2_TIE(0) | UART_C2_TCIE(0) | UART_C2_RIE(1) | UART_C2_RE(1) | UART_C2_TE(0));
-	
+
 	NVIC_SetPriority(UART1_IRQn, 3);
 	NVIC_ClearPendingIRQ(UART1_IRQn);
 	NVIC_EnableIRQ(UART1_IRQn);
@@ -179,7 +182,7 @@ void initUart1()
 // Inits the Systick to keep track of internal clock
 void initSysTick()
 {
-	SysTick->LOAD = (48000000L/24); // lower sysclock to 1Mhz to fit in Load
+	SysTick->LOAD = (48000000L/24); // lower sysclock to 2Mhz to fit in Load
 	SysTick->VAL = 0;
 	SysTick->CTRL = SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk; // Enable interrupts and timer
 	NVIC_SetPriority(SysTick_IRQn, 3);
@@ -218,7 +221,7 @@ void initHeater  (uint16_t period)
 	//Set TPM count direction to up with a divide by 2 prescaler
 
 	TPM0->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
-	TPM0->SC  = TPM_SC_CMOD(1) | TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
+	TPM0->SC  = TPM_SC_CMOD(0) | TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
 	
 	//Continue operation in debug mode
 	TPM0->CONF  |= TPM_CONF_DBGMODE(3);
@@ -285,11 +288,13 @@ void setMedOnOffSettings(uint8_t state)
 	{
 		breathTime = 0;
 		delayTime = 0;
+		TPM0->SC  &= (TPM_SC_CMOD(0) & 0xffffffff);
 		PTC->PCOR |= (MASK(SERVO_SHIFT) | MASK(LED_MED));
 	}
 	else
 	{
 		handleLedTimes(_timer);
+		TPM0->SC  |= TPM_SC_CMOD(1);
 		PTC->PSOR |= MASK(LED_MED);
 	}
 }
@@ -558,21 +563,35 @@ void UART1_IRQHandler()
 {
 	// get data
 	struct ZenEspData espData;
+	uint8_t uart1Data = 0;
+	while(!(UART1->S1 & UART_S1_RDRF_MASK))
+	{
+		// Wait for data
+	}
 	
-	uint8_t uart1Data = UART1->D;
-	
+	//uart1Data = UART1_D;
+	uint8_t uart2Data = UART1->D;
+	uart2Data = (uart2Data >> 1);
+	UART1_D = 0;
+	uart1Data = ~uart1Data;
 	if(prev_espData != uart1Data)
 	{
 		// Done for readability
 		espData.sysOnOff = (uart1Data >> sysOnOffMask); // get the MSB onoff status
-		espData.breathSetting = (uart1Data & breathSetMask); // get the 6,5 bit
-		espData.medTime = (uart1Data & medTimeMask); // get the med time data
-		
-		// Set the settings
-		setMedOnOffSettings(espData.sysOnOff);
-		breathingSetting = espData.breathSetting;
-		medTimeMax = (espData.medTime * MED_TIME_SCALAR) + MED_TIME_DEFAULT; // Always 20 minute minimum.
-		
+		// No status change, this is a setting update request
+		if(espData.sysOnOff == 0)
+		{
+			espData.breathSetting = (uart1Data & breathSetMask); // get the 6,5 bit
+			espData.medTime = (uart1Data & medTimeMask); // get the med time data
+			
+			// Set the settings
+			breathingSetting = espData.breathSetting;
+			medTimeMax = (espData.medTime * MED_TIME_SCALAR) + MED_TIME_DEFAULT; // Always 20 minute minimum.
+		}
+		else if(espData.sysOnOff == 1) // This is a status request
+		{
+			setMedOnOffSettings(espData.sysOnOff & 0x01); // send the first bit
+		}
 		// Set prev_data to new data for comparison
 		prev_espData = uart1Data; 
 	}

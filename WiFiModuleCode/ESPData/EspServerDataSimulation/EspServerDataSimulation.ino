@@ -1,30 +1,28 @@
-/*********
-  Rui Santos
-  Complete project details at https://RandomNerdTutorials.com/esp32-esp8266-input-data-html-form/
-  
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files.
-  
-  The above copyright notice and this permission notice shall be included in all
-  copies or substantial portions of the Software.
-*********/
-
+/*The following project used some HTLM code from the following project found online:
+ * https://randomnerdtutorials.com/esp32-access-point-ap-web-server/
+ * 
+ * 
+ * 
+ * 
+ */
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESPAsyncWebServer.h>
-#include <Ticker.h>
+
+#define MedTimeDefault (20)
+#define MedTimeMax (180)
 AsyncWebServer server(80);
 
-Ticker tick;
 // Set your access point network credentials
-const char* ssid = "BeOurGuest";
-const char* password = "idontknowit";
+const char* ssid = "GalaxyS6";
+const char* password = "qjxu3445";
 const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
 
 
-// HTML web page to handle 3 input fields (input1, input2, input3)
+// Handles the Inputs on the WebPage
+// Base code taken from Project mentioned in description
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
   <title>ESP Input Form</title>
@@ -32,7 +30,7 @@ const char index_html[] PROGMEM = R"rawliteral(
   </head><body>
   <form action="/get">
     Meditation Time: <input type="text" name="input1">
-    <br> <p> Maximum meditation time is 180 min </p>
+    <br> <p> Maximum meditation (20 to 180 minutes) </p>
     <br> Breathing Pattern: <input type="text" name="input2">
     <br> <p> 1 = 2 seconds inhale and exhale </p>
     <br> <p> 2 = 3 seconds inhale and 2 seconds exhale </p>
@@ -62,12 +60,14 @@ void notFound(AsyncWebServerRequest *request) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
+  // setup UART Tx PINS
+  
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("WiFi Failed!");
-    return;
+  while(WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Not connected yet");
   }
   Serial.println();
   Serial.print("IP Address: ");
@@ -78,54 +78,113 @@ void setup() {
     request->send_P(200, "text/html", index_html);
   });
 
-  // Send a GET request to <ESP_IP>/get?input1=<inputMessage>
+  // Send a GET request to esp module and get respective meditation time and
+  // breathing pattern and send it through uart.
   server.on("/get", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    String inputMessage1 = "0";
-    String inputMessage2 = "0";
+    String medTime = "0";
+    String breathSet = "0";
     String inputParam1;
     String inputParam2;
     // GET input1 value on <ESP_IP>/get?input1=<inputMessage>
     if (request->hasParam(PARAM_INPUT_1)) {
-      inputMessage1 = request->getParam(PARAM_INPUT_1)->value();
+      medTime = request->getParam(PARAM_INPUT_1)->value();
       inputParam1 = PARAM_INPUT_1;
     }
     // GET input2 value on <ESP_IP>/get?input2=<inputMessage>
     if (request->hasParam(PARAM_INPUT_2)) {
-      inputMessage2 = request->getParam(PARAM_INPUT_2)->value();
+      breathSet = request->getParam(PARAM_INPUT_2)->value();
       inputParam2 = PARAM_INPUT_2;
     }
     else {
-      inputMessage1 = "No message sent";
-      inputMessage2 = "No message sent";
+      medTime = "No message sent";
+      breathSet = "No message sent";
       inputParam1 = "none";
       inputParam2 = "none";
     }
-    Serial.println(inputMessage1);
-    Serial.println(inputMessage2);
     request->send(200, "text/html", "HTTP GET request sent to your ESP on "
                                      "input field (" + inputParam1 + ")" +
-                                     "with value: " + inputMessage1 +
+                                     "with value: " + medTime +
                                      "<br> input field (" + inputParam1 + ") " +
-                                     "with value: " + inputMessage2 +
+                                     "with value: " + breathSet +
                                      "<br><a href=\"/\">Return to Home Page</a>");
-
-     handleIt(); // SEND IT TO UART HERE
+     if(medTime != "" && breathSet != "")
+     {                                
+      handleUart(medTime.toInt(), breathSet.toInt()); // SEND IT TO UART HERE
+     }
   });
 
+  // sends the start request to the client device
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
-  tick.once_ms<AsyncWebServerRequest *>(500, [](AsyncWebServerRequest *req) {
-    req->send(200, "text/plain", "Success");
-  }, request);
-});
+    request->send(200, "text/html", "Meditation started <br><a href=\"/\">Return to Home Page</a>");
+    // send on information
+    handleOnOff(true);
+  });
+
+  // sends the stop request to the client device
+  server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", "Meditation stopped <br><a href=\"/\">Return to Home Page</a>");
+    // Send off information
+    handleOnOff(false);
+  });
   server.onNotFound(notFound);
   server.begin();
 }
 
-void handleIt()
+// Handles the on/off data Rx to the kl25z
+void handleOnOff(bool intendedOn)
 {
-  Serial.println("You'redumb");
+  uint8_t zenData = 128; // default off.
+  if(intendedOn)
+  {
+    zenData = 129; // On.
+  }
+  else
+  {
+    zenData = 129;
+  }
+  Serial.write(60);
+  Serial.flush();
+}
+
+// Handles UART Rx to the KL25z
+void handleUart(uint8_t med_Time, uint8_t breathPattern)
+{
+  uint8_t zenData = 0; // defaults
+  // max is 180 Minutes
+  if(med_Time > MedTimeMax)
+  {
+    // Default 20 minutes subtracted from 180
+    med_Time = MedTimeMax - MedTimeDefault;
+  }
+  else if(med_Time < MedTimeDefault)
+  {
+    med_Time = 0; // Add no time to the default. 
+  }
+  else
+  {
+    // do nothing
+  }
+  med_Time = uint8_t(round((float)med_Time / (float)10));
+  // Get a value between 0-31. 
+
+  if(breathPattern > 3)
+  {
+    breathPattern = 3;
+  }
+  else
+  {
+    // do nothing.
+  }
+  zenData = med_Time; // assign time to zenData
+  zenData |= (breathPattern << 5); // shift to correct position
+  //zenData &= 0x7F; // 8th bit is 0 to indicate a settings update only
+  Serial.write(zenData); // System is off, some time set
+  Serial.flush();
 }
 
 void loop() {
-  
+  if(Serial.available())
+  {
+    Serial.println(Serial.read());
+  }
 }
