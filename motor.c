@@ -3,7 +3,7 @@
 #include "system_MKL25Z4.h"             // Keil::Device:Startup
 #include "math.h"
 #define LEDHeater (1)			//Simulating Heater as LED on D PIN 0, This requires TPM0 and Channel 0 "Pavan"
-#define PWM_PERIOD (48000)
+#define PWM_PERIOD (24000)
 
 // PORT C Define breathing
 #define SERVO_SHIFT (0) // PORTC relay connected to Servo.
@@ -67,11 +67,9 @@ static uint8_t prev_medState = 0; // Have we transistioned states?
 static uint8_t InhaleExhaleSetting = 0;	// setting for inhale/exhale  "Pavan"
 static uint8_t prev_heaterSetting = 5; // a value that is impossible to set later
 
-static uint8_t prev_espData = (MED_TIME_DEFAULT/MED_TIME_SCALAR); // Current defaults
-
 // Globals for Meditation Time LEDS.
-static uint8_t medTimeCurrent = MED_TIME_DEFAULT; // 20 minute default
-static uint8_t medTimeMax = MED_TIME_DEFAULT; // max time 
+static uint16_t medTimeCurrent = MED_TIME_DEFAULT; // 20 minute default
+static uint16_t medTimeMax = MED_TIME_DEFAULT; // max time 
 // enums
 // State of breathing
 enum breathState
@@ -561,6 +559,8 @@ enum espDataMasks
 // Handles incoming UART communication
 void UART1_IRQHandler()
 {
+	static uint8_t firstByte = 0; // has recieved first byte
+	static uint8_t onOffOrSetting = 0; // A setting
 	// get data
 	struct ZenEspData espData;
 	uint8_t uart1Data = 0;
@@ -570,34 +570,34 @@ void UART1_IRQHandler()
 	}
 	
 	//uart1Data = UART1_D;
-	uint8_t uart2Data = UART1->D;
-	uart2Data = (uart2Data >> 1);
-	UART1_D = 0;
-	uart1Data = ~uart1Data;
-	if(prev_espData != uart1Data)
+	uart1Data = UART1->D;
+	firstByte = ~firstByte; // flip the bit. Hhave received first one
+	if(firstByte == 1)
 	{
-		// Done for readability
-		espData.sysOnOff = (uart1Data >> sysOnOffMask); // get the MSB onoff status
-		// No status change, this is a setting update request
-		if(espData.sysOnOff == 0)
-		{
-			espData.breathSetting = (uart1Data & breathSetMask); // get the 6,5 bit
-			espData.medTime = (uart1Data & medTimeMask); // get the med time data
-			
-			// Set the settings
-			breathingSetting = espData.breathSetting;
-			medTimeMax = (espData.medTime * MED_TIME_SCALAR) + MED_TIME_DEFAULT; // Always 20 minute minimum.
-		}
-		else if(espData.sysOnOff == 1) // This is a status request
-		{
-			setMedOnOffSettings(espData.sysOnOff & 0x01); // send the first bit
-		}
-		// Set prev_data to new data for comparison
-		prev_espData = uart1Data; 
+		onOffOrSetting = uart1Data;
 	}
 	else
 	{
-		// do nothing.
+		if(onOffOrSetting == 1)
+		{
+				espData.breathSetting = (uart1Data & breathSetMask); // get the 6,5 bit
+				espData.medTime = (uart1Data & medTimeMask); // get the med time data
+				
+				// Set the settings
+				breathingSetting = espData.breathSetting;
+				// (Time * 10 min scalar + 20 min) * 60 to convert to seconds 
+				medTimeMax = ((espData.medTime * MED_TIME_SCALAR) + MED_TIME_DEFAULT) * 60; // Always 20 minute minimum.
+			// Set prev_data to new data for comparison
+		}
+		else if (onOffOrSetting == 0)
+		{
+			inMeditation = uart1Data & 0x01;
+			setMedOnOffSettings(inMeditation); // send the first bit
+		}
+		else
+		{
+			// do nothing
+		}
 	}
 
 }

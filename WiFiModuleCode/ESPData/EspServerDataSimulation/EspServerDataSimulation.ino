@@ -67,11 +67,11 @@ void setup() {
   WiFi.begin(ssid, password);
   while(WiFi.status() != WL_CONNECTED)
   {
-    Serial.println("Not connected yet");
+    delay(1000);
   }
-  Serial.println();
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  //Serial.println();
+  //Serial.print("IP Address: ");
+  //Serial.println(WiFi.localIP());
 
   // Send web page with input fields to client
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -136,13 +136,15 @@ void handleOnOff(bool intendedOn)
   uint8_t zenData = 128; // default off.
   if(intendedOn)
   {
-    zenData = 129; // On.
+    zenData = 0x01; // On.
   }
   else
   {
-    zenData = 129;
+    zenData = 0x00;
   }
-  Serial.write(60);
+  Serial.write(0);
+  delay(50);
+  Serial.write(zenData); // on off
   Serial.flush();
 }
 
@@ -154,7 +156,7 @@ void handleUart(uint8_t med_Time, uint8_t breathPattern)
   if(med_Time > MedTimeMax)
   {
     // Default 20 minutes subtracted from 180
-    med_Time = MedTimeMax - MedTimeDefault;
+    med_Time = 150; // max time Add 10 when read by kl25z
   }
   else if(med_Time < MedTimeDefault)
   {
@@ -176,15 +178,14 @@ void handleUart(uint8_t med_Time, uint8_t breathPattern)
     // do nothing.
   }
   zenData = med_Time; // assign time to zenData
-  zenData |= (breathPattern << 5); // shift to correct position
+  zenData |= (breathPattern << 4); // shift to correct position
   //zenData &= 0x7F; // 8th bit is 0 to indicate a settings update only
+  Serial.write(1); // zendata sent
+  delay(50);
   Serial.write(zenData); // System is off, some time set
   Serial.flush();
 }
 
 void loop() {
-  if(Serial.available())
-  {
-    Serial.println(Serial.read());
-  }
+  
 }

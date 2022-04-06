@@ -3,11 +3,11 @@
 <title>Static Call Graph - [.\Objects\servo.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image .\Objects\servo.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 6160001: Last Updated: Tue Apr  5 19:35:43 2022
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 6160001: Last Updated: Tue Apr  5 21:00:57 2022
 <BR><P>
 <H3>Maximum Stack Usage =        144 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
-UART1_IRQHandler &rArr; setMedOnOffSettings &rArr; handleLedTimes &rArr; ceil &rArr; __aeabi_cdrcmple
+__rt_entry_main &rArr; main &rArr; handleSwitches &rArr; setMedOnOffSettings &rArr; handleLedTimes &rArr; ceil &rArr; __aeabi_cdrcmple
 <P>
 <H3>
 Functions with no stack information
@@ -513,8 +513,8 @@ Global Symbols
 <P><STRONG><a name="[26]"></a>SystemInit</STRONG> (Thumb, 8 bytes, Stack size 0 bytes, system_mkl25z4.o(.text.SystemInit))
 <BR>[Address Reference Count : 1]<UL><LI> startup_mkl25z4.o(.text)
 </UL>
-<P><STRONG><a name="[13]"></a>UART1_IRQHandler</STRONG> (Thumb, 184 bytes, Stack size 24 bytes, motor.o(.text.UART1_IRQHandler))
-<BR><BR>[Stack]<UL><LI>Max Depth = 144<LI>Call Chain = UART1_IRQHandler &rArr; setMedOnOffSettings &rArr; handleLedTimes &rArr; ceil &rArr; __aeabi_cdrcmple
+<P><STRONG><a name="[13]"></a>UART1_IRQHandler</STRONG> (Thumb, 164 bytes, Stack size 16 bytes, motor.o(.text.UART1_IRQHandler))
+<BR><BR>[Stack]<UL><LI>Max Depth = 136<LI>Call Chain = UART1_IRQHandler &rArr; setMedOnOffSettings &rArr; handleLedTimes &rArr; ceil &rArr; __aeabi_cdrcmple
 </UL>
 <BR>[Calls]<UL><LI><a href="#[4c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;setMedOnOffSettings
 </UL>
