@@ -7,10 +7,6 @@
 #define SW3 (2) // Buttons to choose music
 #define SW4 (1) // Buttons to choose music
 
-#define clock (12000000U) // current clock for TPM
-#define secondScalar (1000000) // counter to get time in seconds
-#define MAX_DAC_CODE (4095)
-#define NUM_STEPS (512)
 #define MASK(x) (1UL << (x))
 
 //OCTAVE 3
@@ -177,8 +173,8 @@ static uint16_t *songPtr = 0; // grab the ptr for faster note preparation
 static uint16_t songSize = 0; // gets the song size of calculation
 static uint16_t songTempo = 80; // Beats per minute
 static float noteDelay = .25; // roughly .25 seconds
-static uint32_t cntOverflow = 0; // counts the overflows
-static uint32_t songCnt = 0; // Counts the total time spent
+static uint8_t noteTime = 0; // Counts the total time spent
+static uint8_t songPlaying = 0; // take away calculations just in case song is not playing
 
 enum songChoice
 {
@@ -193,6 +189,68 @@ uint16_t calcNoteDelay(void); // calculates the delay between notes
 void play_music (uint8_t song); // selects the song to be played and set defaults
 void TPM_setup (void); // inits the TPM to output to PORTE pin 20
 void initSoundSwPins (void);
+void initPit(void); // used to change the note
+void updateNote(void);
+
+void TPM_setup (void) {
+
+	SIM->SCGC6 |= SIM_SCGC6_TPM1_MASK;
+	SIM->SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
+	SIM->SOPT2 |= SIM_SOPT2_TPMSRC(1);
+
+	SIM->SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
+	SIM->SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
+
+	//Set TPM Count direction to up with a divide by prescaler
+	TPM1->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
+	TPM1->SC = TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS(0);
+
+	//Continue operation in debug mode
+	TPM1->CONF |= TPM_CONF_DBGMODE(3);
+
+	//Set channel TPM0 Channel 0 to edge-aligned low true PWM
+	TPM1->CONTROLS[0].CnSC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
+	TPM1->CONTROLS[0].CnSC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
+
+	//TPM is off initially
+	TPM1->SC &= (TPM_SC_CMOD(0) & 0xffffffff); // clear only CMOD field
+}
+
+void init_pit(){
+ //Enable clock to PIT module
+ SIM->SCGC6 |= SIM_SCGC6_PIT_MASK; //Enable module
+ PIT->MCR &= ~PIT_MCR_MDIS_MASK; //enable mdis
+ PIT->MCR |= PIT_MCR_FRZ_MASK; 
+//Initialize PIT0 to count down from starting_value
+ PIT->CHANNEL[0].LDVAL =0xFFFFF; //every 100ms //No chaining of timers 
+PIT->CHANNEL[0].TCTRL &= PIT_TCTRL_CHN_MASK; 
+PIT->CHANNEL[0].TCTRL |= PIT_TCTRL_TEN_MASK; //Let the PIT channel generate interrupt requests 
+PIT->CHANNEL[0].TCTRL |= PIT_TCTRL_TIE_MASK; 
+	
+NVIC_SetPriority(PIT_IRQn, 3); //Clear any pending IRQ from PIT 
+NVIC_ClearPendingIRQ(PIT_IRQn); //Enable the PIT interrupt in the NVIC 
+NVIC_EnableIRQ(PIT_IRQn); 
+}
+
+void initSoundSwPins()
+{
+	SIM->SCGC5 |= (SIM_SCGC5_PORTA_MASK) | (SIM_SCGC5_PORTD_MASK) | (SIM_SCGC5_PORTE_MASK);  //enable clock for port B
+
+	PORTE->PCR[SOUND_OUT] &= ~PORT_PCR_MUX_MASK;
+	PORTE->PCR[SOUND_OUT] |= PORT_PCR_MUX(1); // set to GPIO pin
+	
+	PTE->PDDR |= MASK(SOUND_OUT);
+	
+	PORTA->PCR[SW1] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+	PORTD->PCR[SW2] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+	PORTA->PCR[SW3] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+	PORTA->PCR[SW4] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+
+	PTA->PDDR &= ~MASK(SW1); //Declaring button for SW1 state as INPUT
+	PTD->PDDR &= ~MASK(SW2); //Declaring button for SW2 state as INPUT
+	PTA->PDDR &= ~MASK(SW3); //Declaring button for SW3 state as INPUT
+	PTA->PDDR &= ~MASK(SW4); //Declaring button for SW4 state as INPUT	
+}
 
 int main (void) {
 	
@@ -278,8 +336,10 @@ void play_music(uint8_t song) {
 	
 	if(playsong == 1)
 	{
+		noteIndex = 0;
+		songPlaying = 1;
+		// Start the song by getting the first 2 notes
 		currentNote = songPtr[noteIndex];
-		nextNote = songPtr[++noteIndex];
 		TPM1->MOD = currentNote - 1;
 		TPM1->SC |= TPM_SC_CMOD(1); // turn on the tmp
 	}
@@ -289,63 +349,50 @@ void play_music(uint8_t song) {
 	}
 }
 
-void TPM_setup (void) {
-
-	SIM->SCGC6 |= SIM_SCGC6_TPM1_MASK;
-	SIM->SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
-	SIM->SOPT2 |= SIM_SOPT2_TPMSRC(1);
-
-	SIM->SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
-	SIM->SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
-
-	//Set TPM Count direction to up with a divide by prescaler
-	TPM1->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
-	TPM1->SC  = TPM_SC_CMOD(1) | TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
-
-	//Continue operation in debug mode
-	TPM1->CONF |= TPM_CONF_DBGMODE(3);
-
-	//Set channel TPM0 Channel 0 to edge-aligned low true PWM
-	TPM1->CONTROLS[0].CnSC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
-	TPM1->CONTROLS[0].CnSC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
-
-	//TPM is off initially
-	TPM1->SC &= TPM_SC_CMOD(0);
-}
-
-void initSoundSwPins()
+// Get the next note, and update the TPM to the current note
+void updateNote()
 {
-	SIM->SCGC5 |= (SIM_SCGC5_PORTA_MASK) | (SIM_SCGC5_PORTD_MASK) | (SIM_SCGC5_PORTE_MASK);  //enable clock for port B
-
-	PORTE->PCR[SOUND_OUT] &= ~PORT_PCR_MUX_MASK;
-	PORTE->PCR[SOUND_OUT] |= PORT_PCR_MUX(1); // set to GPIO pin
+	noteIndex++; // update the note index
 	
-	PTE->PDDR |= MASK(SOUND_OUT);
-	
-	PORTA->PCR[SW1] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-	PORTD->PCR[SW2] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-	PORTA->PCR[SW3] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-	PORTA->PCR[SW4] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-
-	PTA->PDDR &= ~MASK(SW1); //Declaring button for SW1 state as INPUT
-	PTD->PDDR &= ~MASK(SW2); //Declaring button for SW2 state as INPUT
-	PTA->PDDR &= ~MASK(SW3); //Declaring button for SW3 state as INPUT
-	PTA->PDDR &= ~MASK(SW4); //Declaring button for SW4 state as INPUT	
-}
-
-void TPM1_IRQHandler()
-{
-	// On overflow, change the note to the next note, and get the next note
-	currentNote = nextNote;
-	TPM1->MOD = currentNote;
-	if(noteIndex < songSize)
+	if(noteIndex < songSize) //set next note
 	{
-		nextNote = clock/songPtr[noteIndex];
+		currentNote = songPtr[noteIndex]; // gets the next indexed value
 	}
 	else
 	{
-		// Song ends next time
-		// set current song back to 0
-		currentSong = none;
+		TPM1->MOD = 0; // reset mod
+		TPM1->SC &= (TPM_SC_CMOD(0) & 0xffffffff); // clear only CMOD field
+		PIt
+	}
+
+	
+	TPM1->MOD = currentNote - 1;
+
+}
+
+// Handles the Toggling of the speaker
+void TPM1_IRQHandler()
+{
+	// On overflow, 
+	if(songPlaying == 1)
+	{
+		PTE->PTOR |= MASK(SOUND_OUT); // toggle on overflow
+		TPM1->SC |= TPM_SC_TOF(1); // reset the overflow flag
+	}
+	else
+	{
+		// do nothing.
+	}
+}
+
+// Handles note switching based on pit
+void PIT_IRQHandler()
+{ 
+	// When PIT is done, we change the note
+	noteTime++;
+	if(noteTime >= noteDelay)
+	{
+		updateNote(); // update 
+		noteTime = 0; // reset timer
 	}
 }
