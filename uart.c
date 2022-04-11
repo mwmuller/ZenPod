@@ -1,12 +1,15 @@
 #include "MKL25Z4.h"                    // Device header
 #include <math.h>
 
-#define SOUND_OUT (20) // Sound Output in PORTE
+#define SOUND_OUT (1) // Sound Output in PORTC
 #define SW1 (12) // Buttons to choose music
 #define SW2 (4) // Buttons to choose music
 #define SW3 (2) // Buttons to choose music
 #define SW4 (1) // Buttons to choose music
 
+
+#define MAX_DAC_CODE (4095)
+#define NUM_STEPS (512)
 #define MASK(x) (1UL << (x))
 
 //OCTAVE 3
@@ -64,8 +67,15 @@
 # define  E_o7     2637
 # define  C_o7     2093
 
+//Global Music Variables
+static unsigned long period, dutyCycle;
+static unsigned int note;
+static uint16_t SineTable[NUM_STEPS];
+static uint16_t * Reload_DMA_Source=0;
+static uint32_t Reload_DMA_Byte_Count=0;
+
 // "Montagues and Capulets" a.k.a "Dance of the Knights" by Sergei Prokofiev
-static uint16_t Knights[] = { //80 notes total
+static unsigned int Knights[] = { //80 notes total
 	B_o3, E_o4,G_o4,B_o4,E_o5,B_o4,G_o4,E_o4,B_o3, //9
 	E_o4,G_o4,B_o4,E_o5,B_o4,D_o5,Fsh_o5,B_o5,D_o6, //9
 	D_o5,Fsh_o5,D_o5,B_o4,D_o5,Fsh_o5,B_o5,D_o6,Dsh_o6, //9
@@ -75,8 +85,16 @@ static uint16_t Knights[] = { //80 notes total
 	B_o3,E_o4,G_o4,B_o4,E_o5,B_o4,Fsh_o5,B_o5,D_o6,Fsh_o5, //10
 	D_o4,B_o4,Fsh_o5,Fsh_o5,G_o5,Fsh_o5,F_o5,F_o5,F_o5,F_o5,Fsh_o4, 0, 0, 0, 0}; 
 
+// "Megalovania"
+static unsigned int Megalovania[] = {//70 notes
+  D_o4, D_o4, D_o5, 0, A_o4, 0, 0, Gsh_o4,0, G_o4, 0, F_o4, 0,D_o4,F_o4,G_o4,C_o4, C_o4, //18
+  D_o5,0, A_o4, 0,0,Gsh_o4,0,G_o4,0,F_o4, 0, D_o4, F_o4, G_o4, B_o3, B_o3, D_o5, 0, A_o4, //19 
+  0, 0, Gsh_o4, 0, G_o4, 0, F_o4, 0, D_o4, F_o4, G_o4, A_o3, A_o3, D_o5, 0, A_o4, 0, 0,  //18
+  Gsh_o4, 0,  G_o4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0   //15
+};
+
 //"Hedwig" theme from Harry Potter
-static uint16_t Hedwig[]={ //140 notes total
+static unsigned int Hedwig[]={ //140 notes total
 D_o4,0,G_o4,0,0,Ash_o4,A_o4,G_o4,0, //9
 0,0,D_o5,C_o5,0,0,0,A_o4, //8
 0,0,0,0,G_o4,0,0,Ash_o4,  //8
@@ -96,7 +114,7 @@ D_o5,Csh_o5,0,Csh_o4,0,0,D_o4,D_o5, //8
 0,Ash_o4,0,G_o4,0,0,0,0,0,0, 0}; //11
 
 //"Waltz in A minor by Chopin"
-static uint16_t Amin[] = {//563 notes  
+static unsigned int Amin[] = {//563 notes  
   E_o4,0,0,0,0,0, A_o4, 0,0, B_o4, 0, 0, C_o5, 0,0,0,0,0,C_o5,0,			 //20 1
 	0,0,0,0,D_o5, 0,0,E_o5, 0,0, F_o5, 0,0,0,0,0,0,0,0,0, 							 //20 2
 	0,0, B_o4,0,0,C_o5, 0,0,D_o5, 0,0, A_o5,0,0, G_o5, 0,0, F_o5, 0,0, 	 //20 3
@@ -127,7 +145,7 @@ static uint16_t Amin[] = {//563 notes
 	Gsh_o6,0,0,E_o6,0,0,E_o7,0,0,E_o7,0,0,0,0,0,A_o6,0,0,0,0,0,0,0 								 //23
 };
 //"Virus by Beethoven" theme from the movie
-static uint16_t Virus [] = {  //640
+static unsigned int Virus [] = {  //640
   E_o4,0,A_o4,0,B_o4,0,C_o5,0,0,0,0,0,D_o5,0,B_o4,0,0,0,0,0,  //20								1
 	C_o5,0,A_o4,0,0,0,0,0,0,0,0,0,A_o4,Gsh_o4,A_o4,B_o4,C_o5,D_o5,E_o5,0,					//2
 	0,0,E_o5,0,0,0,E_o5,0,0,0,E_o5,0,0,0,E_o5,0,0,0,0,0,													//3
@@ -161,238 +179,255 @@ static uint16_t Virus [] = {  //640
 	A_o5,0,F_o5,0,A_o5,0,E_o5,0,A_o5,0,Dsh_o5,0,0,0,0,0,B_o4,0,Dsh_o5,0,					//31
 	C_o6,0,0,0,Dsh_o5,0,0,0,B_o5,0,0,0,D_o4,0,E_o4,0,F_o4,0,G_o4,0								//32
 };
+unsigned int play_music (unsigned int song);
+void buzz(unsigned long dutyc, int length); 
+void delayMicroseconds(unsigned long val);
+void TPM_setup (void);
+void Init_DAC(void);
+void Init_SineTable(void);
+void Init_DMA_For_Playback(uint16_t * source, uint32_t count);
+void Start_DMA_Playback(void);
+void Delay_us(volatile unsigned int time_del);
+int main (void) {
+	SIM ->SCGC5 |= (SIM_SCGC5_PORTA_MASK) | (SIM_SCGC5_PORTD_MASK) | (SIM_SCGC5_PORTE_MASK) | SIM_SCGC5_PORTC_MASK;  //enable clock for port B
+						//uint8_t count = 0;
+						//uint8_t dec_hex=16; //change to 10 for decimal
+						//short seg7 = noswitch;
+/* This function shows value of count on display the decimal point is 
+displayed if dp=1
+count must be less than 10 for decimal, or less than 16 for Hex. */
+		PORTA->PCR[SW1] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+		PORTD->PCR[SW2] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+		PORTA->PCR[SW3] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+		PORTA->PCR[SW4] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
+	
+		PORTC->PCR[SOUND_OUT] &= ~PORT_PCR_MUX_MASK; //Select GPIO
+		PORTC->PCR[SOUND_OUT] |= PORT_PCR_MUX(4);
+		PTA->PDDR |= MASK(SOUND_OUT); //Declaring button for SW1 state as INPUT
+	
+		PTA->PDDR &= ~MASK(SW1); //Declaring button for SW1 state as INPUT
+    PTD->PDDR &= ~MASK(SW2); //Declaring button for SW2 state as INPUT
+		PTA->PDDR &= ~MASK(SW3); //Declaring button for SW3 state as INPUT
+    PTA->PDDR &= ~MASK(SW4); //Declaring button for SW4 state as INPUT	
+	
+		Init_DAC();
+		Init_SineTable ();
+		Init_DMA_For_Playback(SineTable, NUM_STEPS);
+		TPM_setup ();
+		Start_DMA_Playback();
+while(1){
+	/*
+	if (PORTA->ISFR & MASK(SW1)) {
+			play_music (1);
+		PORTA->ISFR &= 0xffffffff;
+							}
+	else if (PORTD->ISFR & MASK(SW2)) {
+			play_music (2);
+			PORTD->ISFR &= 0xffffffff;
+							}
+	else if (PORTA->ISFR & MASK(SW3)) {
+			play_music (3);
+			PORTA->ISFR &= 0xffffffff;
+							}
+	else if (PORTA->ISFR & MASK(SW4)) {
+			play_music (4);
+			PORTA->ISFR &= 0xffffffff;
+							}
+	else  {
+			play_music (3);
+			//PORTD->ISFR &= 0xffffffff;
+							}	*/
+							play_music (2);
+						}
+}
+unsigned int play_music (unsigned int song) {
+	//unsigned int size;
+	//uint16_t i=0;
+	uint16_t delay = 0;
+switch(song){	
+	case 0: //Wait for the first song to initialize
+    period = 0;  //Play nothing while we wait
+    dutyCycle = 0;
+		break;
+  case 1:
+		//size = sizeof(Knights)/sizeof(unsigned int);
+    // "Montagues and Capulets" a.k.a "Dance of the Knights" by Sergei Prokofiev
+	  period = 24000000/(Knights[note]*64); //Period = Clock/Frequency
+    dutyCycle = period/2;               //50% duty cycle
+	 //delayMicroseconds(dutyCycle); // wait for the calculated delay value 
+    if (note<80) //If there are more notes in the array, go to the next note
+      note++;
+    if (note>=80){//If there are no more notes in the array, start the song over
+      note = 0;
+    } 
+		
+			break;
+  case 2:
+				period = 24000000/(Hedwig[note]*64);      //Period = Clock/Frequency
+				dutyCycle = period/2;               //50% duty cycle
+			//int delnote = 1000/Hedwig[note];
+	// for (delay = 0;delay<1000; delay++) {	
+		// delay++;
+	if (note<140) {//If there are more notes in the array, go to the next note
+			if (delay<10000)
+				delay++;
+      note++;
+			TPM0->CONTROLS[1].CnV=  dutyCycle;
+		  TPM0->MOD = period;
+			//	for (delay=0; delay<10000; delay++)
+								//		;} 
+	} 
+    if (note>=140){//If there are no more notes in the array, start the song over
+      note = 0;
+    }	
+		
+	//} 
+		break;
+  case 3:
+	period = 24000000/(Megalovania[note]*64);        //Period = Clock/Frequency
+    dutyCycle = period/2;               //50% duty cycle
+   /* if (note<70) {//If there are more notes in the array, go to the next note
+			note++;
+		}
+    if (note>=70){//If there are no more notes in the array, start the song over
+      note = 0;
+    }
+		delayMicroseconds(1000); */
+	
+		for (note=0; note<70; note++) {
+			TPM0->CONTROLS[1].CnV=  dutyCycle;
+		  TPM0->MOD = period;
+				for (delay=0; delay<10; delay++)
+										;
+		}
+	
+			break;
+	case 4:
+				period = 24000000/(Virus[note]*64);      //Period = Clock/Frequency
+				dutyCycle = period/2;               //50% duty cycle
+		if (note<640) {//If there are more notes in the array, go to the next note
+      note++; }
+    if (note>=640){//If there are no more notes in the array, start the song over
+      note = 0;
+    }	
+		
+    
+		break;
+	}
+    TPM0->CONTROLS[1].CnV=  dutyCycle;
+		TPM0->MOD = period;
+	return song;
+}	
 
-
-//Global Music Variables
-static uint8_t currentSong = 0; // get the current song
-static uint8_t prevSong = 0; // Ensure songs have changed if button pressed?
-static uint16_t currentNote = 0; // Get the current note to be used as TPM mod
-static uint16_t nextNote = 0; // get the next note pre-emptively
-static uint16_t noteIndex = 0; // store the current note
-static uint16_t *songPtr = 0; // grab the ptr for faster note preparation
-static uint16_t songSize = 0; // gets the song size of calculation
-static uint16_t songTempo = 80; // Beats per minute
-static float noteDelay = .25; // roughly .25 seconds
-static uint8_t noteTime = 0; // Counts the total time spent
-static uint8_t songPlaying = 0; // take away calculations just in case song is not playing
-
-enum songChoice
-{
-	none = 0,
-	knights,
-	hedwig,
-	amin,
-	virus
-};
-
-uint16_t calcNoteDelay(void); // calculates the delay between notes
-void play_music (uint8_t song); // selects the song to be played and set defaults
-void TPM_setup (void); // inits the TPM to output to PORTE pin 20
-void initSoundSwPins (void);
-void initPit(void); // used to change the note
-void updateNote(void);
 
 void TPM_setup (void) {
 
-	SIM->SCGC6 |= SIM_SCGC6_TPM1_MASK;
-	SIM->SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
-	SIM->SOPT2 |= SIM_SOPT2_TPMSRC(1);
+SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
 
-	SIM->SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
-	SIM->SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
+SIM->SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
+SIM->SOPT2 |= SIM_SOPT2_TPMSRC(1);
 
-	//Set TPM Count direction to up with a divide by prescaler
-	TPM1->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
-	TPM1->SC = TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS(0);
+SIM->SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
+SIM->SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
 
-	//Continue operation in debug mode
-	TPM1->CONF |= TPM_CONF_DBGMODE(3);
+//Load the counter and the mod
+// TPM0->MOD = 6;
 
-	//Set channel TPM0 Channel 0 to edge-aligned low true PWM
-	TPM1->CONTROLS[0].CnSC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
-	TPM1->CONTROLS[0].CnSC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
+//Set TPM Count direction to up with a divide by prescaler
+TPM0->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
+TPM0->SC  = TPM_SC_CMOD(1) | TPM_SC_PS(6) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
 
-	//TPM is off initially
-	TPM1->SC &= (TPM_SC_CMOD(0) & 0xffffffff); // clear only CMOD field
+//Continue operation in debug mode
+TPM0->CONF |= TPM_CONF_DBGMODE(3);
+
+//Set channel 1 to edge-aligned low-true PWM
+TPM0->CONTROLS[1].CnSC = TPM_CnSC_MSB_MASK | TPM_CnSC_ELSA_MASK;
+
+//Set channel TPM0 Channel 0 to edge-aligned low true PWM
+TPM0_C1SC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
+TPM0_C1SC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
+
+//Set initial duty cycle
+ TPM0->CONTROLS[1].CnV = 4;
+
+//Start TPM
+TPM0->SC |= TPM_SC_CMOD(1);
+
+
 }
 
-void init_pit(){
- //Enable clock to PIT module
- SIM->SCGC6 |= SIM_SCGC6_PIT_MASK; //Enable module
- PIT->MCR &= ~PIT_MCR_MDIS_MASK; //enable mdis
- PIT->MCR |= PIT_MCR_FRZ_MASK; 
-//Initialize PIT0 to count down from starting_value
- PIT->CHANNEL[0].LDVAL =0xFFFFF; //every 100ms //No chaining of timers 
-PIT->CHANNEL[0].TCTRL &= PIT_TCTRL_CHN_MASK; 
-PIT->CHANNEL[0].TCTRL |= PIT_TCTRL_TEN_MASK; //Let the PIT channel generate interrupt requests 
-PIT->CHANNEL[0].TCTRL |= PIT_TCTRL_TIE_MASK; 
+void Init_DAC(void) {
+  // Init DAC output
 	
-NVIC_SetPriority(PIT_IRQn, 3); //Clear any pending IRQ from PIT 
-NVIC_ClearPendingIRQ(PIT_IRQn); //Enable the PIT interrupt in the NVIC 
-NVIC_EnableIRQ(PIT_IRQn); 
-}
-
-void initSoundSwPins()
-{
-	SIM->SCGC5 |= (SIM_SCGC5_PORTA_MASK) | (SIM_SCGC5_PORTD_MASK) | (SIM_SCGC5_PORTE_MASK);  //enable clock for port B
-
-	PORTE->PCR[SOUND_OUT] &= ~PORT_PCR_MUX_MASK;
-	PORTE->PCR[SOUND_OUT] |= PORT_PCR_MUX(1); // set to GPIO pin
+	SIM->SCGC6 |= (1UL << SIM_SCGC6_DAC0_SHIFT); 
+	SIM->SCGC5 |= (1UL << SIM_SCGC5_PORTD_SHIFT); 
 	
-	PTE->PDDR |= MASK(SOUND_OUT);
-	
-	PORTA->PCR[SW1] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-	PORTD->PCR[SW2] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-	PORTA->PCR[SW3] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-	PORTA->PCR[SW4] = PORT_PCR_MUX(1) | PORT_PCR_PS_MASK | PORT_PCR_PE_MASK | PORT_PCR_IRQC(11);
-
-	PTA->PDDR &= ~MASK(SW1); //Declaring button for SW1 state as INPUT
-	PTD->PDDR &= ~MASK(SW2); //Declaring button for SW2 state as INPUT
-	PTA->PDDR &= ~MASK(SW3); //Declaring button for SW3 state as INPUT
-	PTA->PDDR &= ~MASK(SW4); //Declaring button for SW4 state as INPUT	
-}
-
-int main (void) {
-	
-	initSoundSwPins();
-	TPM_setup();
-	currentSong = knights;
-	
-	while(1){
-			
-		if (PORTA->ISFR & MASK(SW1))
-		{
-			currentSong = knights;
-			PORTA->ISFR &= 0xffffffff;
-		}
-		else if (PORTD->ISFR & MASK(SW2))
-		{
-			currentSong = hedwig;
-			PORTD->ISFR &= 0xffffffff;
-		}
-		else if (PORTA->ISFR & MASK(SW3))
-		{
-			currentSong = amin;
-			PORTA->ISFR &= 0xffffffff;
-		}
-		else if (PORTA->ISFR & MASK(SW4))
-		{
-			currentSong = virus;
-			PORTA->ISFR &= 0xffffffff;
-		}
-		else  
-		{
-			currentSong = none;
-		}
-		if(currentSong != prevSong)
-		{
-			noteIndex = 0; // reset the song index
-			play_music(currentSong);	
-			prevSong = currentSong;
-		}
-	}
-}
-
-void play_music(uint8_t song) {
-	
-	uint8_t playsong = 0;
-	
-	switch(song){		
-		case 0: //Wait for the first song to initialize
-			TPM1->SC &= TPM_SC_CMOD(0); // turn off the TPM
-			playsong = 0;
-		break;
+	PORTD->PCR[SOUND_OUT] &= ~(PORT_PCR_MUX(7));	// Select analog 
+	PORTD->PCR[SOUND_OUT] |= PORT_PCR_MUX(4);
+	//PTD->PTOR = MASK(SOUND_OUT);
 		
-		case 1:
-			// "Montagues and Capulets" a.k.a "Dance of the Knights" by Sergei Prokofiev
-			songPtr = &Knights[0];
-			songSize = sizeof(Knights)/sizeof(uint16_t);
-			playsong = 1;
-			break;
-		
-		case 2:
-			songPtr = &Hedwig[0];
-			songSize = sizeof(Hedwig)/sizeof(uint16_t);
-			playsong = 1;
-			break;
-		
-		case 3:
-			songPtr = &Amin[0];
-			songSize = sizeof(Amin)/sizeof(uint16_t);
-			playsong = 1;
-			break;
-		
-		case 4:
-			songPtr = &Virus[0];
-			songSize = sizeof(Virus)/sizeof(uint16_t);
-			playsong = 1;
-			break;
-		
-		default:
-			TPM1->SC &= TPM_SC_CMOD(0); // turn off the TPM
-			playsong = 0;
-			break;
-	}	
+	// Disable buffer mode
+	DAC0->C1 = 0;
+	DAC0->C2 = 0;
 	
-	if(playsong == 1)
-	{
-		noteIndex = 0;
-		songPlaying = 1;
-		// Start the song by getting the first 2 notes
-		currentNote = songPtr[noteIndex];
-		TPM1->MOD = currentNote - 1;
-		TPM1->SC |= TPM_SC_CMOD(1); // turn on the tmp
-	}
-	else
-	{
-		// do nothing
-	}
-}
-
-// Get the next note, and update the TPM to the current note
-void updateNote()
-{
-	noteIndex++; // update the note index
-	
-	if(noteIndex < songSize) //set next note
-	{
-		currentNote = songPtr[noteIndex]; // gets the next indexed value
-	}
-	else
-	{
-		TPM1->MOD = 0; // reset mod
-		TPM1->SC &= (TPM_SC_CMOD(0) & 0xffffffff); // clear only CMOD field
-		PIt
-	}
-
-	
-	TPM1->MOD = currentNote - 1;
+	// Enable DAC, select VDDA as reference voltage
+	DAC0->C0 = (1 << DAC_C0_DACEN_SHIFT) | (1 << DAC_C0_DACRFS_SHIFT);
 
 }
 
-// Handles the Toggling of the speaker
-void TPM1_IRQHandler()
-{
-	// On overflow, 
-	if(songPlaying == 1)
-	{
-		PTE->PTOR |= MASK(SOUND_OUT); // toggle on overflow
-		TPM1->SC |= TPM_SC_TOF(1); // reset the overflow flag
-	}
-	else
-	{
-		// do nothing.
+void Init_SineTable(void) {
+	unsigned int n;
+	
+	for (n=0; n<NUM_STEPS; n++) {
+		SineTable[n] = ((MAX_DAC_CODE/2)*(1+sin(n*2*3.1415927/NUM_STEPS)));
 	}
 }
+	
+	void Init_DMA_For_Playback(uint16_t * source, uint32_t count) {
+	// Save reload information
+	Reload_DMA_Source = source;
+	Reload_DMA_Byte_Count = count*2;
+	
+	// Gate clocks to DMA and DMAMUX
+	SIM->SCGC7 |= SIM_SCGC7_DMA_MASK;
+	SIM->SCGC6 |= SIM_SCGC6_DMAMUX_MASK;
 
-// Handles note switching based on pit
-void PIT_IRQHandler()
-{ 
-	// When PIT is done, we change the note
-	noteTime++;
-	if(noteTime >= noteDelay)
-	{
-		updateNote(); // update 
-		noteTime = 0; // reset timer
+	// Disable DMA channel to allow configuration
+	DMAMUX0->CHCFG[0] = 0;
+	
+	// Generate DMA interrupt when done
+	// Increment source, transfer words (16 bits)
+	// Enable peripheral request
+	DMA0->DMA[0].DCR = DMA_DCR_EINT_MASK | DMA_DCR_SINC_MASK | 
+											DMA_DCR_SSIZE(2) | DMA_DCR_DSIZE(2) |
+											DMA_DCR_ERQ_MASK | DMA_DCR_CS_MASK;
+	
+	// Configure NVIC for DMA ISR
+	NVIC_SetPriority(DMA0_IRQn, 2);
+	NVIC_ClearPendingIRQ(DMA0_IRQn); 
+	NVIC_EnableIRQ(DMA0_IRQn);	
+
+	// Enable DMA MUX channel with TPM0 overflow as trigger
+	DMAMUX0->CHCFG[0] = DMAMUX_CHCFG_SOURCE(54);   
+}
+	void Start_DMA_Playback() {
+	// initialize source and destination pointers
+	DMA0->DMA[0].SAR = DMA_SAR_SAR((uint32_t) Reload_DMA_Source);
+	DMA0->DMA[0].DAR = DMA_DAR_DAR((uint32_t) (&(DAC0->DAT[0])));
+	// byte count
+	DMA0->DMA[0].DSR_BCR = DMA_DSR_BCR_BCR(Reload_DMA_Byte_Count);
+	// clear done flag 
+	DMA0->DMA[0].DSR_BCR &= ~DMA_DSR_BCR_DONE_MASK; 
+	// set enable flag
+	DMAMUX0->CHCFG[0] |= DMAMUX_CHCFG_ENBL_MASK;
+
+}
+
+
+	void Delay_us(volatile unsigned int time_del) {
+	// This is a very imprecise and fragile implementation!
+	time_del = 9*time_del + time_del/2; 
+	while (time_del--) {
+		;
 	}
 }

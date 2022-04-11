@@ -30,13 +30,13 @@ Rebuild target 'CMSIS-DAP'
 assembling startup_MKL25Z4.s...
 compiling system_MKL25Z4.c...
 compiling uart.c...
-uart.c(173): warning:  #550-D: variable "songSize"  was set but never used
-  static uint16_t songSize = 0; // gets the song size of calculation
-uart.c(174): warning:  #177-D: variable "songTempo"  was declared but never referenced
-  static uint16_t songTempo = 80; // Beats per minute
+uart.c(433): warning:  #1-D: last line of file ends without a newline
+  }
+uart.c(117): warning:  #177-D: variable "Amin"  was declared but never referenced
+  static unsigned int Amin[] = {//563 notes  
 uart.c: 2 warnings, 0 errors
 linking...
-Program Size: Code=1780 RO-data=224 RW-data=2872 ZI-data=352  
+Program Size: Code=6904 RO-data=640 RW-data=5992 ZI-data=1376  
 ".\Objects\UartTest.axf" - 0 Error(s), 2 Warning(s).
 
 <h2>Software Packages used:</h2>
@@ -64,10 +64,10 @@ Package Vendor: Keil
    * Component: ARM::CMSIS:CORE:5.5.0
 
    * Component: Keil::Device:Startup:2.5.0
-      Source file:   Device\Source\ARM\startup_MKL25Z4.s
-      Source file:   Device\Source\system_MKL25Z4.c
       Include file:  Device\Source\system_MKL25Z4.h
-Build Time Elapsed:  00:00:00
+      Source file:   Device\Source\system_MKL25Z4.c
+      Source file:   Device\Source\ARM\startup_MKL25Z4.s
+Build Time Elapsed:  00:00:01
 </pre>
 </body>
 </html>
