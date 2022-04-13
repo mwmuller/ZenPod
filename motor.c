@@ -2,18 +2,22 @@
 #include "RTE_Components.h"             // Component selection
 #include "system_MKL25Z4.h"             // Keil::Device:Startup
 #include "math.h"
-#define LEDHeater (1)			//Simulating Heater as LED on D PIN 0, This requires TPM0 and Channel 0 "Pavan"
-#define PWM_PERIOD (24000)
+#include "tempFiles.c"
+
+#define LEDHeater (1)			//Simulating Heater as LED on D PIN 1, This requires TPM0 and Channel 0 "Pavan"
+#define PWM_PERIOD (24000) // Period to use for calculations
+#define minDutyHeater (0.80F) // % value as default
+#define heaterScalar (5)
 
 // PORT C Define breathing
 #define SERVO_SHIFT (0) // PORTC relay connected to Servo.
 #define LED_MED (3) // PORTC LED is meditation is still active
 
 //define 4 LEDS on PORT A
-#define LED1 (5) //PTA1
-#define LED2 (12) //PTA2
-#define LED3 (2) //PTA4
-#define LED4 (1) //PTA5
+#define LED1 (5) //PTA5
+#define LED2 (12) //PTA12
+#define LED3 (2) //PTA2
+#define LED4 (1) //PTA1
 
 // number of LEDS for med time
 #define MED_LED_NUM (4) 
@@ -51,7 +55,7 @@ void initHeater (uint16_t);	//"Pavan"
 void setHeaterPWMDutyCycle();	//"Pavan"
 void handleUartEsp(void);
 void initUart1(void);
-
+void initHandler(void); // handles all init calls
 // Arrays for init
 static uint8_t portCGpio[2] = {SERVO_SHIFT, LED_MED};
 static uint8_t portAGpio[4] = {LED1, LED2, LED3, LED4}; // LED1 indicates lowest time remaining
@@ -110,23 +114,29 @@ static uint8_t medLedMask = 0; // contains 4 bits that will determine the LEDs s
 // ****** MAIN **********
 int main()
 {
-	initPins(); // init speaker port
-	initSysTick(); // init pit timer
-	initUart1(); // init UART pins, clock, and UART communication for Rx
-	initHeater (PWM_PERIOD);	//Initliaze the heater "Pavan"
+	initHandler(); // call system init handler
 	while(1)
 	{
-		handleSwitches();
+		handleSwitches(); // check switches
 		handleMeditationStatus();
-		setHeaterPWMDutyCycle();	//"Pavan"
 	}
 }
 
+// used to init the system.
+void initHandler(){
+	initPins(); // init speaker port
+	Init_ADCTemp(); // inits the temp for heater checking
+	initSysTick(); // init pit timer
+	initUart1(); // init UART pins, clock, and UART communication for Rx
+	initHeater(PWM_PERIOD);	//Initliaze the heater "Pavan"
+	setHeaterPWMDutyCycle();	//"Pavan"
+}
 
 /// **********INIT FUNCTION**************
 // Inits the pins for the board
 void initPins()
 {
+	// init the clocks for pins
 	SIM->SCGC5 |= (SIM_SCGC5_PORTC_MASK | SIM_SCGC5_PORTD_MASK | SIM_SCGC5_PORTA_MASK | SIM_SCGC5_PORTE_MASK);
 	
 	// configure MED LED and Servo Motor
@@ -177,7 +187,7 @@ void initUart1()
 	NVIC_EnableIRQ(UART1_IRQn);
 }
 
-// Inits the Systick to keep track of internal clock
+// Inits the Systick to keep track of internal clock (1 second interrupts)
 void initSysTick()
 {
 	SysTick->LOAD = (48000000L/24); // lower sysclock to 2Mhz to fit in Load
@@ -214,7 +224,7 @@ void initHeater  (uint16_t period)
 	SIM->	SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
 	
 	//Load the counter and MOD, this is active low PWM signal
-	TPM0-> MOD = period-1;
+	TPM0->MOD = period-1;
 	
 	//Set TPM count direction to up with a divide by 2 prescaler
 
@@ -477,48 +487,37 @@ void setLedMask(uint8_t mask)
 void setHeaterPWMDutyCycle (void) 
 {
 
-//detrmine the inhale exhale setting
-//Inhale timinmg could independently determine the setting uniquely 
-//static short inhaleExhaleSettings[3] = {0x22, 0x32, 0x43}; 									// Inhale/Exhale timer
+	//detrmine the inhale exhale setting
+	//Inhale timinmg could independently determine the setting uniquely 
+	//static short inhaleExhaleSettings[3] = {0x22, 0x32, 0x43}; 									// Inhale/Exhale timer
 
-InhaleExhaleSetting = ((inhaleMask & inhaleExhaleSettings[breathingSetting]) >> 4UL);
-
-uint8_t intMinHeatingLevel = 0;
-uint8_t intMaxHeatingLevel = 5;
-uint32_t HeaterPWM = PWM_PERIOD;
-if(InhaleExhaleSetting != prev_heaterSetting)
-{
-	switch(InhaleExhaleSetting)
-    {   
-		case 0: 	//No heating requested
-			HeaterPWM = PWM_PERIOD;
-		break;
-		case 1: 		//20% PWM
-			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
-		break;
-		case 2: 		//40% PWM
-  		HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
-    break;
-		case 3: 		//60% PWM
-			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
-    break;
-		case 4: 		//80% PWM
-			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
-    break;
-		case 5: 		//Maximum hearting with 100% PWM, unused in this program
-			HeaterPWM = (InhaleExhaleSetting) * PWM_PERIOD/intMaxHeatingLevel;
-    break;
-		default: 	//Indetermined state, Unknown state, hold the last value
-			HeaterPWM = PWM_PERIOD;
- 		break;
-    } //End of the switch case
-		TPM0->CONTROLS[1].CnV=HeaterPWM;
-}
-else
-{
-	// warnings. 
-}
-	prev_heaterSetting = InhaleExhaleSetting;
+	InhaleExhaleSetting = ((inhaleMask & inhaleExhaleSettings[breathingSetting]) >> 4UL);
+	uint32_t HeaterPWM = (PWM_PERIOD * minDutyHeater);
+	
+	if(InhaleExhaleSetting != prev_heaterSetting)
+	{
+		switch(InhaleExhaleSetting)
+			{
+			case 1: 		//80% PWM
+				HeaterPWM = (PWM_PERIOD * minDutyHeater);
+			break;
+			case 2: 		//85% PWM
+				HeaterPWM = (PWM_PERIOD * (minDutyHeater * ((InhaleExhaleSetting - 1) * heaterScalar)));
+			break;
+			case 3: 		//90% PWM
+				HeaterPWM = (PWM_PERIOD * (minDutyHeater * ((InhaleExhaleSetting - 1) * heaterScalar)));
+			break;
+			default: 	//Unknown state, use min pwm
+				HeaterPWM = (PWM_PERIOD * minDutyHeater);
+			break;
+			} //End of the switch case
+			TPM0->CONTROLS[1].CnV=HeaterPWM;
+	}
+	else
+	{
+		// warnings. 
+	}
+		prev_heaterSetting = InhaleExhaleSetting;
 } // End of setHeaterPWMDutyCycle function
 
 ///*************IRQ HANDLERS****************
@@ -532,6 +531,7 @@ void SysTick_Handler()
 		medTimeCurrent--;
 		breathStateMachine();
 		handleLedTimes(_timer);
+		Measure_Temperature_Heater();
 	}
 }
 
@@ -546,9 +546,9 @@ struct ZenEspData
 // No hardcoded masks
 enum espDataMasks
 {
-	sysOnOffMask = 0x07,
+	sysOnOffMask = 0x01,
 	breathSetMask = 0x60,
-	medTimeMask = 0x1F
+	medTimeMask = 0x1F,
 };
 
 // On_Off[7:6], breath setting[6:4], meditation total time [4:0]
@@ -585,6 +585,7 @@ void UART1_IRQHandler()
 				
 				// Set the settings
 				breathingSetting = espData.breathSetting;
+				setHeaterPWMDutyCycle(); // update the heater cycle
 				// (Time * 10 min scalar + 20 min) * 60 to convert to seconds 
 				medTimeMax = ((espData.medTime * MED_TIME_SCALAR) + MED_TIME_DEFAULT) * 60; // Always 20 minute minimum.
 			// Set prev_data to new data for comparison
