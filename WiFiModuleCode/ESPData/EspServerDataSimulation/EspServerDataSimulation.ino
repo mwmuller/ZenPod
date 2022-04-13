@@ -11,6 +11,8 @@
 
 #define MedTimeDefault (20)
 #define MedTimeMax (180)
+#define songMax (5)
+
 AsyncWebServer server(80);
 
 // Set your access point network credentials
@@ -19,7 +21,6 @@ const char* password = "qjxu3445";
 const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
-
 
 // Handles the Inputs on the WebPage
 // Base code taken from Project mentioned in description
@@ -45,6 +46,12 @@ const char index_html[] PROGMEM = R"rawliteral(
     <input type="submit" onclick="myFunction()" value="Meditation Stop" name="stop">
   </form>
 
+<form action="/getMusic">
+    Music Selection: <input type="text" name="input3">
+    <br> <p> Between 1 and 4 </p>
+    <input type="submit" value="Submit">
+  </form><br>
+  
   <script>
   function medStart() {
     document.getElementById("demo").innerHTML = "Meditation Started";
@@ -70,8 +77,8 @@ void setup() {
     delay(1000);
   }
   //Serial.println();
-  //Serial.print("IP Address: ");
-  //Serial.println(WiFi.localIP());
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
 
   // Send web page with input fields to client
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -126,6 +133,29 @@ void setup() {
     // Send off information
     handleOnOff(false);
   });
+
+server.on("/getMusic", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String songSelect = "0";
+    String inputParam1;
+    // GET input1 value on <ESP_IP>/get?input1=<inputMessage>
+    if (request->hasParam(PARAM_INPUT_3)) {
+      songSelect = request->getParam(PARAM_INPUT_3)->value();
+      inputParam1 = PARAM_INPUT_3;
+    }
+    else {
+      songSelect = "0"; // default song to off
+      inputParam1 = "none"; // no song selected
+    }
+    request->send(200, "text/html", "HTTP GET request sent to your ESP on "
+                                     "Music field (" + inputParam1 + ")" +
+                                     "with value: " + songSelect +
+                                     "<br><a href=\"/\">Return to Home Page</a>");
+     if(songSelect != "")
+     {                                  
+      handleMusicUart(songSelect.toInt()); // SEND IT TO UART HERE. returns 0 if non-numeric value
+     }
+  });
+  
   server.onNotFound(notFound);
   server.begin();
 }
@@ -145,6 +175,18 @@ void handleOnOff(bool intendedOn)
   Serial.write(0);
   delay(50);
   Serial.write(zenData); // on off
+  Serial.flush();
+}
+
+void handleMusicUart(uint8_t musicSel)
+{
+  uint8_t zenData = 0;
+
+  zenData = musicSel % songMax;
+
+  Serial.write(2); // send it a song
+  delay(50);
+  Serial.write(zenData);
   Serial.flush();
 }
 
