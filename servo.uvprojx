@@ -313,7 +313,7 @@
           </ArmAdsMisc>
           <Cads>
             <interw>1</interw>
-            <Optim>1</Optim>
+            <Optim>2</Optim>
             <oTime>0</oTime>
             <SplitLS>0</SplitLS>
             <OneElfS>1</OneElfS>
@@ -387,6 +387,16 @@
               <FileName>motor.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\motor.c</FilePath>
+            </File>
+            <File>
+              <FileName>tempFiles.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\tempFiles.c</FilePath>
+            </File>
+            <File>
+              <FileName>audio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\audio.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -779,6 +789,16 @@
               <FileName>motor.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\motor.c</FilePath>
+            </File>
+            <File>
+              <FileName>tempFiles.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\tempFiles.c</FilePath>
+            </File>
+            <File>
+              <FileName>audio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\audio.c</FilePath>
             </File>
           </Files>
         </Group>

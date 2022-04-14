@@ -1,6 +1,7 @@
 #include "MKL25Z4.h"                    // Device header
 #include <math.h>
 
+#define CLOCK_AUDIO (24000000)
 #define SOUND_OUT (2) // Sound Output in PORTC
 #define SW1 (12) // Buttons to choose music
 #define SW2 (4) // Buttons to choose music
@@ -14,7 +15,6 @@
 
 #define MAX_DAC_CODE (4095)
 #define NUM_STEPS (512)
-#define MASK(x) (1UL << (x))
 
 //OCTAVE 3
 # define  C_o3     131
@@ -214,28 +214,21 @@ static unsigned int Virus [] = {  //640
 	A_o5,A_o5,F_o5,F_o5,A_o5,A_o5,E_o5,E_o5,A_o5,A_o5,Dsh_o5,Dsh_o5,Dsh_o5,Dsh_o5,Dsh_o5,Dsh_o5,B_o4,B_o4,Dsh_o5,Dsh_o5,					//31
 	C_o6,C_o6,C_o6,C_o6,Dsh_o5,Dsh_o5,Dsh_o5,Dsh_o5,B_o5,B_o5,B_o5,B_o5,D_o4,D_o4,E_o4,E_o4,F_o4,F_o4,G_o4,G_o4								//32
 };
-void play_music (unsigned int song);
-void TPM_setup (void);
-void config_sys_clock(void);
-void init_SysTick(void);
-void updateSongInfo(void);
+static void play_music (unsigned int);
+static void tpmSetupAudio(void);
+static void initPinsAudio(void);
+static void initSongInfo(unsigned int);
+
 //void lcd_data_write(char *data, lcd_line, line, lcd_scrolling, scroll_type);
 //static char lcd_scroll_msg[50]; // msg to be scrolled
 static uint8_t songPlaying = 0; // are we playing a song
 static uint8_t prevSong = 0; // rpeviously no song
-int main (void) {
-	SIM ->SCGC5 |= (SIM_SCGC5_PORTA_MASK) | (SIM_SCGC5_PORTC_MASK) | (SIM_SCGC5_PORTE_MASK);  //enable clock for port B
-	
+static void initPinsAudio()
+{
 	PORTC->PCR[SOUND_OUT] &= ~PORT_PCR_MUX_MASK; // clear
 	PORTC->PCR[SOUND_OUT] |= PORT_PCR_MUX(4); // set to TPM0_CH1
 	
-	PTC->PDDR |= MASK(SOUND_OUT);
-	TPM_setup ();
-	init_SysTick();
-	play_music (1);
-	while(1){
-		; // do nothing
-	}
+	PTC->PDDR |= (1UL << SOUND_OUT);
 }
 
 enum songSelect
@@ -246,7 +239,7 @@ enum songSelect
 	virus
 };
 
-void play_music (unsigned int song) {
+static void play_music (unsigned int song) {
 	uint8_t songPicked = 0;
 	
 	if(prevSong != song)
@@ -258,41 +251,26 @@ void play_music (unsigned int song) {
 				break;
 			case 1:
 				songPtr = Hungarian_Dance;
-				period = 24000000/(songPtr[0]*96); //Period = Clock/Frequency
-				dutyCycle = period/2;               //50% duty cycle
-				curSong = song;
-				songPlaying = 1;
 				songLength = sizeof(Hungarian_Dance)/sizeof(unsigned int); // get the number of notes
 				break;
 			case 2:
 				songPtr = Lacrimosa;
-				period = 24000000/(songPtr[0]*96);      //Period = Clock/Frequency
-				dutyCycle = period/2;               //50% duty cycle
-				curSong = song;
-				songPlaying = 1;
 				songLength = sizeof(Lacrimosa)/sizeof(unsigned int); // get the number of notes
 				break;
 			case 3:
 				songPtr = Amin;
-				period = 24000000/(songPtr[0]*96);        //Period = Clock/Frequency
-				dutyCycle = period/2; //50% duty cycle
-				curSong = song;
-				songPlaying = 1;
 				songLength = sizeof(Amin)/sizeof(unsigned int); // get the number of notes
 				break;
 			case 4:
 				songPtr = Virus;
-				period = 24000000/(songPtr[0]*96);      //Period = Clock/Frequency
-				dutyCycle = period/2;               //50% duty cycle
-				curSong = song;
-				songPlaying = 1;
 				songLength = sizeof(Virus)/sizeof(unsigned int); // get the number of notes
 				break;
 			}
-				TPM0->SC |= TPM_SC_CMOD(1); // start the song
-				TPM0->CONTROLS[1].CnV= dutyCycle; // set the duty cycle
-				TPM0->MOD = period; // set the period
-				prevSong = song;
+			initSongInfo(song);
+			TPM0->SC |= TPM_SC_CMOD(1); // start the song
+			TPM0->CONTROLS[1].CnV= dutyCycle; // set the duty cycle
+			TPM0->MOD = period; // set the period
+			prevSong = song;
 	}
 	else
 	{
@@ -301,7 +279,7 @@ void play_music (unsigned int song) {
 		
 		if(nextNote != 10)
 		{
-			period = 24000000/(*(songPtr + noteIndex)*96);      //Period = Clock/Frequency
+			period = CLOCK_AUDIO/(*(songPtr + noteIndex)*96);      //Period = Clock/Frequency
 			dutyCycle = period/2;
 			TPM0->CONTROLS[1].CnV= dutyCycle; // set the duty cycle
 			TPM0->MOD = period; // set the period
@@ -309,21 +287,17 @@ void play_music (unsigned int song) {
 	}
 }	
 
-void updateSongInfo()
+// Removed redundant duplicate code
+static void initSongInfo(unsigned int song)
 {
-	
+		period = CLOCK_AUDIO/(songPtr[0]*96);        //Period = Clock/Frequency
+		dutyCycle = period/2; //50% duty cycle
+		curSong = song;
+		songPlaying = 1;
+		noteIndex = 0;
 }
 
-void init_SysTick (void) {
-		SysTick->LOAD = (24000000/12); // select 100 ms delay
-		SysTick->VAL = 0;
-		SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk | SysTick_CTRL_TICKINT_Msk;
-		NVIC_SetPriority(SysTick_IRQn, 3);
-		NVIC_ClearPendingIRQ(SysTick_IRQn);
-		NVIC_EnableIRQ(SysTick_IRQn);
-}
-
-void TPM_setup (void) {
+static void tpmSetupAudio (void) {
 
 	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
 
@@ -338,7 +312,7 @@ void TPM_setup (void) {
 
 	//Set TPM Count direction to up with a divide by prescaler
 	TPM0->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
-	TPM0->SC  = TPM_SC_CMOD(0) | TPM_SC_PS(5) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
+	TPM0->SC  = TPM_SC_CMOD(1) | TPM_SC_PS(4) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
 
 	//Continue operation in debug mode
 	TPM0->CONF |= TPM_CONF_DBGMODE(3);
@@ -358,7 +332,23 @@ void TPM_setup (void) {
 
 }
 
-void SysTick_Handler()
+static void stopMusic(uint8_t end)
+{
+	if(end == 1)
+	{
+		noteIndex = 0; // reset the note index
+	}
+	songPlaying = 0;
+	TPM0->SC &= TPM_SC_CMOD(0); // stop the tpm. when resumed, 
+}
+
+static void resumeMusic()
+{
+	songPlaying = 1; // song is playing, do not change any current values
+	TPM0->SC |= TPM_SC_CMOD(1); // resume the song
+}
+
+static void handlerMusicTick()
 {
 	// move on to the next note in the song
 	if(songPlaying == 1)
@@ -371,10 +361,7 @@ void SysTick_Handler()
 		else
 		{
 			// stop the song
-			songPlaying = 0;
-			TPM0->SC |= TPM_SC_CMOD(0); // stop the tpm
-			TPM0->CONTROLS[1].CnV= 0; // set the duty cycle
-			TPM0->MOD = 0;
+			stopMusic(1); // end the song and reset all the counters
 		}
 	}
 	else
@@ -382,6 +369,4 @@ void SysTick_Handler()
 		// do nothing
 	}
 }
-
-
 		

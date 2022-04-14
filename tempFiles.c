@@ -1,7 +1,9 @@
 #include "MKL25Z4.h"                    // Device header
 #include "math.h"
 
-#define ADC_POS (20)
+#define ADC_POS (21)
+static void Init_ADCTemp(void);
+static double Measure_Temperature_Heater(void);
 
 static void Init_ADCTemp (void) 
 {

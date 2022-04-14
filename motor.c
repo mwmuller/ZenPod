@@ -3,8 +3,9 @@
 #include "system_MKL25Z4.h"             // Keil::Device:Startup
 #include "math.h"
 #include "tempFiles.c"
+#include "audio.c"
 
-#define LEDHeater (1)			//Simulating Heater as LED on D PIN 1, This requires TPM0 and Channel 0 "Pavan"
+#define LEDHeater (20)			//Simulating Heater as LED on E PIN 20, This requires TPM0 and Channel 0 "Pavan"
 #define PWM_PERIOD (24000) // Period to use for calculations
 #define minDutyHeater (0.80F) // % value as default
 #define heaterScalar (5)
@@ -12,6 +13,7 @@
 // PORT C Define breathing
 #define SERVO_SHIFT (0) // PORTC relay connected to Servo.
 #define LED_MED (3) // PORTC LED is meditation is still active
+#define vibrationScalar (10) // scales up the timings
 
 //define 4 LEDS on PORT A
 #define LED1 (5) //PTA5
@@ -28,18 +30,22 @@
 
 // PORTE pin 1 is Rx from ESP
 #define UART1_RX_ESP (1)
+#define breathShift (4)
 
 // Delays for state machine
-#define HOLD_DELAY (1) // delay between all states
-#define STATE_DELAY (0)
+#define HOLD_DELAY (10) // delay between all states
+#define STATE_DELAY (10)
 
 // State machine masks
 #define inhaleMask (0x00F0) // grab inhale time
 #define exhaleMask (0x000F) // grab exhale time
 
 // Misc timers
-#define MED_TIME_DEFAULT (60) // default number of milliseconds
+#define MED_TIME_DEFAULT (600) // default number of milliseconds
 #define MED_TIME_SCALAR (10) // Used to scale up from 5 bits
+#define MILLISECONDSCALAR (500) // scales the time into milliseconds. Calibrated taking into account delays
+
+
 #define MASK(x) (1ul << x)
 
 // Prototypes
@@ -72,8 +78,9 @@ static uint8_t InhaleExhaleSetting = 0;	// setting for inhale/exhale  "Pavan"
 static uint8_t prev_heaterSetting = 5; // a value that is impossible to set later
 
 // Globals for Meditation Time LEDS.
-static uint16_t medTimeCurrent = MED_TIME_DEFAULT; // 20 minute default
-static uint16_t medTimeMax = MED_TIME_DEFAULT; // max time 
+static uint32_t medTimeCurrent = MED_TIME_DEFAULT; // 20 minute default
+static uint32_t medTimeMax = MED_TIME_DEFAULT; // max time 
+static uint8_t swDebounce = 0; // if 1, the switch will not be read.
 // enums
 // State of breathing
 enum breathState
@@ -117,7 +124,10 @@ int main()
 	initHandler(); // call system init handler
 	while(1)
 	{
-		handleSwitches(); // check switches
+		if(swDebounce == 0)
+		{
+			handleSwitches(); // check switches
+		}
 		handleMeditationStatus();
 	}
 }
@@ -130,6 +140,8 @@ void initHandler(){
 	initUart1(); // init UART pins, clock, and UART communication for Rx
 	initHeater(PWM_PERIOD);	//Initliaze the heater "Pavan"
 	setHeaterPWMDutyCycle();	//"Pavan"
+	tpmSetupAudio();
+	initPinsAudio();
 }
 
 /// **********INIT FUNCTION**************
@@ -171,11 +183,12 @@ void initUart1()
 	SIM->SCGC4 |= SIM_SCGC4_UART1_MASK; // set clock for scgc4 uart1
 	SIM->SOPT5 |= SIM_SOPT5_UART1RXSRC(0); // Set the src for rx
 	
+	UART1->C4 |= UARTLP_C4_OSR(16);
 	// Init UART settings
 	
 	// Baud rate --> the baud rate equals baud clock / ((OSR+1) × BR).
-	// 9600 = 48Mhz / ((15 + 1) * 9600) => 48,000,000/(16 * 9600) => 0x138
-	UART1->BDL = 0x38;
+	// 9600 = 48Mhz / ((15 + 1) * 9600) => 48,000,000/(16 + 1 * 9600) => 0x138
+	UART1->BDL = 0x45;
 	UART1->BDH = 0x01;
 
 	// Data communication config
@@ -190,54 +203,54 @@ void initUart1()
 // Inits the Systick to keep track of internal clock (1 second interrupts)
 void initSysTick()
 {
-	SysTick->LOAD = (48000000L/24); // lower sysclock to 2Mhz to fit in Load
+	SysTick->LOAD = (240000000L/100); // 100ms delays
 	SysTick->VAL = 0;
-	SysTick->CTRL = SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk; // Enable interrupts and timer
-	NVIC_SetPriority(SysTick_IRQn, 3);
+	SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk | SysTick_CTRL_TICKINT_Msk; // Enable interrupts and timer
+	
+	NVIC_SetPriority(SysTick_IRQn, 2);
 	NVIC_ClearPendingIRQ(SysTick_IRQn);
 	NVIC_EnableIRQ(SysTick_IRQn);
 }
 
 //Function is added by Pavan
-void initHeater  (uint16_t period)
+void initHeater(uint16_t period)
 {
 	// enable the clock for PORTD
-	SIM->SCGC5 |= SIM_SCGC5_PORTD_MASK;  									
+	SIM->SCGC5 |= SIM_SCGC5_PORTE_MASK;  									
 	
 	// Init the Heater PWM (Here LED is simulated as Heater)
-	PORTD->PCR[LEDHeater] &= ~PORT_PCR_MUX_MASK;
+	PORTE->PCR[LEDHeater] &= ~PORT_PCR_MUX_MASK;
 	// Select the PIN for ALT4/TPM functionality
-	PORTD->PCR[LEDHeater] |= PORT_PCR_MUX(4);
+	PORTE->PCR[LEDHeater] |= PORT_PCR_MUX(3);
 	// Selecting the LED pins data direction registers is not advised here. 
 	// The PWM functionality does not run in thst case
 	
 	//enable the clock for TPM
-	SIM->SCGC6 |= SIM_SCGC6_TPM0_MASK;
+	SIM->SCGC6 |= SIM_SCGC6_TPM1_MASK;
 	//Configure TPM
 	
 	//Set clock source for tpm : 48 MHz
-	SIM	->	SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
+	SIM->SOPT2 &= ~SIM_SOPT2_TPMSRC_MASK;
 	// Selecting the clock from the board, internal clock is set to use
-	SIM -> 	SOPT2 |= SIM_SOPT2_TPMSRC (1);
+	SIM->SOPT2 |= SIM_SOPT2_TPMSRC (1);
 
-	SIM-> SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
-	SIM->	SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
+	SIM->SOPT2 &= ~SIM_SOPT2_PLLFLLSEL_MASK;
+	SIM->SOPT2 |= SIM_SOPT2_PLLFLLSEL(0);
 	
 	//Load the counter and MOD, this is active low PWM signal
-	TPM0->MOD = period-1;
+	TPM1->MOD = period-1;
 	
 	//Set TPM count direction to up with a divide by 2 prescaler
-
-	TPM0->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
-	TPM0->SC  = TPM_SC_CMOD(0) | TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
+	TPM1->SC &= ~((TPM_SC_CPWMS_MASK) | (TPM_SC_CMOD_MASK) | (TPM_SC_PS_MASK));
+	TPM1->SC = TPM_SC_CMOD(0) | TPM_SC_PS(2) | TPM_SC_TOIE_MASK | TPM_SC_CPWMS_MASK;
 	
 	//Continue operation in debug mode
-	TPM0->CONF  |= TPM_CONF_DBGMODE(3);
+	TPM1->CONF  |= TPM_CONF_DBGMODE(3);
 	
 	// Configured as Edge Aligned PWM, 	
-	//Set channel TPM0 Channel 0 to edge-aligned low true PWM
-	TPM0_C1SC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
-	TPM0_C1SC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
+	//Set channel TPM0 Channel 2 to edge-aligned low true PWM
+	TPM1_C0SC &= ~((TPM_CnSC_ELSB_MASK) | (TPM_CnSC_ELSA_MASK));
+	TPM1_C0SC |= (TPM_CnSC_ELSB(1) | TPM_CnSC_ELSA(0) |  TPM_CnSC_MSB(1)  | TPM_CnSC_MSA(0));
 	
 }	// End of Init Heater function
 /// ****************INIT FUNC END**************
@@ -260,11 +273,13 @@ void handleSwitches()
 	{
 		handleLedTimes(_plus);
 		PORTD->ISFR &= 0xffffffff; // clear button flag
+		swDebounce = 1;
 	}
 	else if(PORTD->ISFR & MASK(MINUS_SWITCH))
 	{
 		handleLedTimes(_minus);
 		PORTD->ISFR &= 0xffffffff; // clear button flag
+		swDebounce = 1;
 	}
 	else
 	{
@@ -285,6 +300,7 @@ void handleSwitches()
 			inMeditation = 1;
 			setMedOnOffSettings(inMeditation);
 		}
+		swDebounce = 1;
 		PORTD->ISFR &= 0xffffffff; // clear button flag
 	}
 }
@@ -296,13 +312,13 @@ void setMedOnOffSettings(uint8_t state)
 	{
 		breathTime = 0;
 		delayTime = 0;
-		TPM0->SC  &= (TPM_SC_CMOD(0) & 0xffffffff);
+		TPM1->SC  &= (TPM_SC_CMOD(0) & 0xffffffff);
 		PTC->PCOR |= (MASK(SERVO_SHIFT) | MASK(LED_MED));
 	}
 	else
 	{
 		handleLedTimes(_timer);
-		TPM0->SC  |= TPM_SC_CMOD(1);
+		TPM1->SC  |= TPM_SC_CMOD(1);
 		PTC->PSOR |= MASK(LED_MED);
 	}
 }
@@ -323,7 +339,7 @@ void breathStateMachine()
 			break;
 		case inhaling:
 			breathTime++; // increment the seconds
-			if(breathTime >= (inhaleMask & inhaleExhaleSettings[breathingSetting]) >> 4UL)
+			if(breathTime >= ((inhaleMask & inhaleExhaleSettings[breathingSetting]) >> 4UL) * vibrationScalar)
 			{
 				currentBreathState = holding;
 				breathTime = 0;
@@ -339,7 +355,7 @@ void breathStateMachine()
 			break;
 		case exhaling:
 			breathTime++; // increment the seconds
-			if(breathTime >= (exhaleMask & inhaleExhaleSettings[breathingSetting]))
+			if(breathTime >= (exhaleMask & inhaleExhaleSettings[breathingSetting]) * vibrationScalar)
 			{
 				currentBreathState = noBreath;
 				breathTime = 0;
@@ -489,35 +505,32 @@ void setHeaterPWMDutyCycle (void)
 
 	//detrmine the inhale exhale setting
 	//Inhale timinmg could independently determine the setting uniquely 
-	//static short inhaleExhaleSettings[3] = {0x22, 0x32, 0x43}; 									// Inhale/Exhale timer
-
-	InhaleExhaleSetting = ((inhaleMask & inhaleExhaleSettings[breathingSetting]) >> 4UL);
 	uint32_t HeaterPWM = (PWM_PERIOD * minDutyHeater);
 	
-	if(InhaleExhaleSetting != prev_heaterSetting)
+	if(breathingSetting != prev_heaterSetting)
 	{
-		switch(InhaleExhaleSetting)
+		switch(breathingSetting)
 			{
-			case 1: 		//80% PWM
+			case 0: 		//80% PWM
 				HeaterPWM = (PWM_PERIOD * minDutyHeater);
 			break;
-			case 2: 		//85% PWM
-				HeaterPWM = (PWM_PERIOD * (minDutyHeater * ((InhaleExhaleSetting - 1) * heaterScalar)));
+			case 1: 		//85% PWM
+				HeaterPWM = (PWM_PERIOD * (minDutyHeater + (((breathingSetting - 1) * heaterScalar) / 100)));
 			break;
-			case 3: 		//90% PWM
-				HeaterPWM = (PWM_PERIOD * (minDutyHeater * ((InhaleExhaleSetting - 1) * heaterScalar)));
+			case 2: 		//90% PWM
+				HeaterPWM = (PWM_PERIOD * (minDutyHeater + (((breathingSetting - 1) * heaterScalar) / 100)));
 			break;
-			default: 	//Unknown state, use min pwm
-				HeaterPWM = (PWM_PERIOD * minDutyHeater);
+			default: 	//Unknown state, use no heat
+				HeaterPWM = 0;
 			break;
 			} //End of the switch case
-			TPM0->CONTROLS[1].CnV=HeaterPWM;
+			TPM1->CONTROLS[0].CnV=HeaterPWM;
 	}
 	else
 	{
 		// warnings. 
 	}
-		prev_heaterSetting = InhaleExhaleSetting;
+		prev_heaterSetting = breathingSetting;
 } // End of setHeaterPWMDutyCycle function
 
 ///*************IRQ HANDLERS****************
@@ -533,6 +546,15 @@ void SysTick_Handler()
 		handleLedTimes(_timer);
 		Measure_Temperature_Heater();
 	}
+	handlerMusicTick();
+	if(swDebounce >= 2)
+	{
+		swDebounce = 0; // Allow buttons to be pressed again
+	}
+	else
+	{
+		swDebounce++;
+	}
 }
 
 // Struct for handling Zendata. Readability
@@ -547,8 +569,8 @@ struct ZenEspData
 enum espDataMasks
 {
 	sysOnOffMask = 0x01,
-	breathSetMask = 0x60,
-	medTimeMask = 0x1F,
+	breathSetMask = 0x30,
+	medTimeMask = 0x0F,
 };
 
 // On_Off[7:6], breath setting[6:4], meditation total time [4:0]
@@ -556,11 +578,19 @@ enum espDataMasks
 // Breath setting is 1-3
 // Meditation time is min 20 - max 180, 5 min increments. 20 + (2^5 * 5)
 
+enum espSettingType
+{
+	onOffMed = 0,
+	medTimeBreathing,
+	musicSelection,
+	onOffMusic
+};
+
 // Handles incoming UART communication
 void UART1_IRQHandler()
 {
 	static uint8_t firstByte = 0; // has recieved first byte
-	static uint8_t onOffOrSetting = 0; // A setting
+	static uint8_t espSettingsUpdate = 0; // A setting to be updated
 	// get data
 	struct ZenEspData espData;
 	uint8_t uart1Data = 0;
@@ -571,35 +601,56 @@ void UART1_IRQHandler()
 	
 	//uart1Data = UART1_D;
 	uart1Data = UART1->D;
-	firstByte = ~firstByte; // flip the bit. Hhave received first one
-	if(firstByte == 1)
+	firstByte = ~firstByte; // Set first byte received
+	if(firstByte & 1)
 	{
-		onOffOrSetting = uart1Data;
+		espSettingsUpdate = uart1Data;
 	}
 	else
 	{
-		if(onOffOrSetting == 1)
+		switch(espSettingsUpdate)
 		{
-				espData.breathSetting = (uart1Data & breathSetMask); // get the 6,5 bit
+			case onOffMed:
+				inMeditation = uart1Data & 0x01;
+				setMedOnOffSettings(inMeditation); // send the first bit
+			break;
+			
+			case medTimeBreathing:
+				espData.breathSetting = (uart1Data & breathSetMask) >> breathShift; // get the 6,5 bit
 				espData.medTime = (uart1Data & medTimeMask); // get the med time data
 				
 				// Set the settings
 				breathingSetting = espData.breathSetting;
 				setHeaterPWMDutyCycle(); // update the heater cycle
 				// (Time * 10 min scalar + 20 min) * 60 to convert to seconds 
-				medTimeMax = ((espData.medTime * MED_TIME_SCALAR) + MED_TIME_DEFAULT) * 60; // Always 20 minute minimum.
+				medTimeMax = (espData.medTime * MED_TIME_SCALAR) * MILLISECONDSCALAR; // Always 20 minute minimum.
+				medTimeCurrent = medTimeMax;
+				currentMedState = MED_LED_NUM; // LEDS determine the med state for leds
 			// Set prev_data to new data for comparison
-		}
-		else if (onOffOrSetting == 0)
-		{
-			inMeditation = uart1Data & 0x01;
-			setMedOnOffSettings(inMeditation); // send the first bit
-		}
-		else
-		{
-			// do nothing
+			break;
+			
+			case musicSelection:
+				// get the song selection and play the song
+				prevSong = 0; // Replay the same song
+				
+				play_music(uart1Data); // shift bit due to ESP
+			break;
+			
+			case onOffMusic:
+				if(uart1Data & 1) // We want to resume playing
+				{
+					resumeMusic(); // resume the song
+				}
+				else if(uart1Data == 0)
+				{
+					// stop the song do not reset the index
+					stopMusic(0); 
+				}
+			default:
+				// do not update info
+				firstByte = 0; // byte from data was not useable
+			break;
 		}
 	}
-
 }
 

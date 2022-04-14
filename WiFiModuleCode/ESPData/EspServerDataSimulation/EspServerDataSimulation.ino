@@ -12,7 +12,6 @@
 #define MedTimeDefault (20)
 #define MedTimeMax (180)
 #define songMax (5)
-
 AsyncWebServer server(80);
 
 // Set your access point network credentials
@@ -21,6 +20,7 @@ const char* password = "qjxu3445";
 const char* PARAM_INPUT_1 = "input1";
 const char* PARAM_INPUT_2 = "input2";
 const char* PARAM_INPUT_3 = "input3";
+
 
 // Handles the Inputs on the WebPage
 // Base code taken from Project mentioned in description
@@ -33,32 +33,31 @@ const char index_html[] PROGMEM = R"rawliteral(
     Meditation Time: <input type="text" name="input1">
     <br> <p> Maximum meditation (20 to 180 minutes) </p>
     <br> Breathing Pattern: <input type="text" name="input2">
-    <br> <p> 1 = 2 seconds inhale and exhale </p>
-    <br> <p> 2 = 3 seconds inhale and 2 seconds exhale </p>
-    <br> <p> 3 = 4 seconds inhale and 3 seconds exhale </p>
+     <p> 0 = 2 seconds inhale and exhale </p>
+     <p> 1 = 3 seconds inhale and 2 seconds exhale </p>
+     <p> 2 = 4 seconds inhale and 3 seconds exhale </p>
     <input type="submit" value="Submit">
   </form><br>
   <form action="/start">
-    <input type="submit" onclick="myFunction()" value="Meditation Start" name="start">
+    <input type="submit" value="Meditation Start" name="start">
     <p id="demo"</p>
   </form>
   <form action="/stop">
-    <input type="submit" onclick="myFunction()" value="Meditation Stop" name="stop">
+    <input type="submit" value="Meditation Stop" name="stop">
   </form>
-
-<form action="/getMusic">
+  <form action="/getMusic">
     Music Selection: <input type="text" name="input3">
     <br> <p> Between 1 and 4 </p>
     <input type="submit" value="Submit">
-  </form><br>
-  
+  </form>
+<form action="/stopMusic">
+    <p> Music Settings </p>
+    <input type="submit" value="Stop Music" name="stopMusic">
+  </form>
+  <form action="/resumeMusic">
+    <input type="submit" value="Resume Music" name="resume">
+  </form>
   <script>
-  function medStart() {
-    document.getElementById("demo").innerHTML = "Meditation Started";
-  }
-  function medStop() {
-    document.getElementById("demo").innerHTML = "Meditation Stopped";
-  }
 </script>
 </body></html>)rawliteral";
 
@@ -77,8 +76,8 @@ void setup() {
     delay(1000);
   }
   //Serial.println();
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  //Serial.print("IP Address: ");
+  //Serial.println(WiFi.localIP());
 
   // Send web page with input fields to client
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -134,6 +133,20 @@ void setup() {
     handleOnOff(false);
   });
 
+   // sends the stop request to the client device
+  server.on("/stopMusic", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", "Music stopped <br><a href=\"/\">Return to Home Page</a>");
+    // Send off information
+    handleOnOffMusic(0);
+  });
+
+   // sends the stop request to the client device
+  server.on("/resumeMusic", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", "Music resumed <br><a href=\"/\">Return to Home Page</a>");
+    // Send off information
+    handleOnOffMusic(1);
+  });
+
 server.on("/getMusic", HTTP_GET, [] (AsyncWebServerRequest *request) {
     String songSelect = "0";
     String inputParam1;
@@ -152,7 +165,7 @@ server.on("/getMusic", HTTP_GET, [] (AsyncWebServerRequest *request) {
                                      "<br><a href=\"/\">Return to Home Page</a>");
      if(songSelect != "")
      {                                  
-      handleMusicUart(songSelect.toInt()); // SEND IT TO UART HERE. returns 0 if non-numeric value
+        handleMusicUart(songSelect.toInt()); // SEND IT TO UART HERE. returns 0 if non-numeric value
      }
   });
   
@@ -173,9 +186,22 @@ void handleOnOff(bool intendedOn)
     zenData = 0x00;
   }
   Serial.write(0);
-  delay(50);
+  delay(100);
   Serial.write(zenData); // on off
   Serial.flush();
+}
+
+void handleOnOffMusic(uint8_t onOff)
+{
+  uint8_t zenData = 0; //default music off
+
+  zenData = onOff;
+
+  Serial.write(0x03); // send it a song
+  delay(100);
+  Serial.write(zenData);
+  Serial.flush();
+  
 }
 
 void handleMusicUart(uint8_t musicSel)
@@ -184,8 +210,8 @@ void handleMusicUart(uint8_t musicSel)
 
   zenData = musicSel % songMax;
 
-  Serial.write(2); // send it a song
-  delay(50);
+  Serial.write(0x02); // send it a song
+  delay(100);
   Serial.write(zenData);
   Serial.flush();
 }
@@ -211,9 +237,9 @@ void handleUart(uint8_t med_Time, uint8_t breathPattern)
   med_Time = uint8_t(round((float)med_Time / (float)10));
   // Get a value between 0-31. 
 
-  if(breathPattern > 3)
+  if(breathPattern > 2)
   {
-    breathPattern = 3;
+    breathPattern = 2;
   }
   else
   {
@@ -223,7 +249,7 @@ void handleUart(uint8_t med_Time, uint8_t breathPattern)
   zenData |= (breathPattern << 4); // shift to correct position
   //zenData &= 0x7F; // 8th bit is 0 to indicate a settings update only
   Serial.write(1); // zendata sent
-  delay(50);
+  delay(100);
   Serial.write(zenData); // System is off, some time set
   Serial.flush();
 }
